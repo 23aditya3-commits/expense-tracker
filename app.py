@@ -1,7 +1,7 @@
 import streamlit as st
 import sqlite3
 import pandas as pd
-from datetime import date
+from datetime import date, datetime
 
 # -------------------------------
 # PAGE CONFIG
@@ -14,6 +14,7 @@ st.set_page_config(page_title="Expense Tracker", layout="centered")
 conn = sqlite3.connect("expenses.db", check_same_thread=False)
 c = conn.cursor()
 
+# Expenses table
 c.execute("""
 CREATE TABLE IF NOT EXISTS expenses (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -25,12 +26,18 @@ CREATE TABLE IF NOT EXISTS expenses (
 )
 """)
 
-# Ensure column exists (safe for old DB)
-try:
-    c.execute("ALTER TABLE expenses ADD COLUMN payment_mode TEXT")
-    conn.commit()
-except:
-    pass
+# Settings table (MONTH-WISE)
+c.execute("""
+CREATE TABLE IF NOT EXISTS settings (
+    month TEXT PRIMARY KEY,
+    income REAL,
+    investments REAL,
+    sent_home REAL,
+    emi REAL
+)
+""")
+
+conn.commit()
 
 # -------------------------------
 # TITLE
@@ -38,31 +45,68 @@ except:
 st.title("💰 Expense Tracker")
 
 # -------------------------------
-# SESSION STATE (PREVENT RESET)
+# 📅 MONTH SELECTOR (TOP)
 # -------------------------------
-for key in ["income", "investments", "sent_home", "emi"]:
-    if key not in st.session_state:
-        st.session_state[key] = 0
+current_month = datetime.now().strftime("%Y-%m")
+
+# Get months from DB
+df_all = pd.read_sql("SELECT * FROM expenses", conn)
+
+if not df_all.empty:
+    df_all['date'] = pd.to_datetime(df_all['date'])
+    months = sorted(df_all['date'].dt.to_period("M").astype(str).unique(), reverse=True)
+    if current_month not in months:
+        months.insert(0, current_month)
+else:
+    months = [current_month]
+
+selected_month = st.selectbox("📅 Select Month", months, index=0)
+
+st.divider()
+
+# -------------------------------
+# 💰 LOAD MONTHLY BUDGET
+# -------------------------------
+settings = c.execute("SELECT * FROM settings WHERE month=?", (selected_month,)).fetchone()
+
+if settings:
+    income_db, invest_db, home_db, emi_db = settings[1], settings[2], settings[3], settings[4]
+else:
+    income_db, invest_db, home_db, emi_db = 0, 0, 0, 0
 
 # -------------------------------
 # 💰 MONTHLY BUDGET
 # -------------------------------
-st.subheader("💰 Monthly Budget Planner")
+st.subheader(f"💰 Budget for {selected_month}")
 
-income = st.number_input("Monthly Income", value=st.session_state.income)
-investments = st.number_input("Investments", value=st.session_state.investments)
-sent_home = st.number_input("Sent to Home", value=st.session_state.sent_home)
-emi = st.number_input("EMI", value=st.session_state.emi)
+col1, col2 = st.columns(2)
 
-# Save values
-st.session_state.income = income
-st.session_state.investments = investments
-st.session_state.sent_home = sent_home
-st.session_state.emi = emi
+with col1:
+    income = st.number_input("Monthly Income", value=income_db)
+    investments = st.number_input("Investments", value=invest_db)
+
+with col2:
+    sent_home = st.number_input("Sent to Home", value=home_db)
+    emi = st.number_input("EMI", value=emi_db)
 
 remaining_budget = income - (investments + sent_home + emi)
 
-st.success(f"💸 Remaining Budget for Expenses: ₹ {remaining_budget}")
+st.success(f"💸 Remaining Budget: ₹ {remaining_budget}")
+
+# Save
+if st.button("💾 Save Budget"):
+    c.execute("""
+    INSERT INTO settings (month, income, investments, sent_home, emi)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(month) DO UPDATE SET
+        income=excluded.income,
+        investments=excluded.investments,
+        sent_home=excluded.sent_home,
+        emi=excluded.emi
+    """, (selected_month, income, investments, sent_home, emi))
+    
+    conn.commit()
+    st.success("✅ Budget Saved!")
 
 st.divider()
 
@@ -74,27 +118,13 @@ st.subheader("🧾 Add Expense")
 exp_date = st.date_input("Date", date.today())
 
 payment_mode = st.selectbox("Mode of Payment", [
-    "Cash/Kotak",
-    "Amazonpay CC",
-    "Ixiago CC",
-    "Jupiter CC",
-    "Tata Neu CC",
-    "Sbi CC",
-    "Mom Kotak",
-    "Icici CC",
-    "Swiggy CC"
+    "Cash/Kotak","Amazonpay CC","Ixiago CC","Jupiter CC",
+    "Tata Neu CC","Sbi CC","Mom Kotak","Icici CC","Swiggy CC"
 ])
 
 category = st.selectbox("Category", [
-    "Grocery",
-    "Pets",
-    "Dress",
-    "Entertainment",
-    "Education",
-    "Misc",
-    "Food",
-    "Rent",
-    "Others"
+    "Grocery","Pets","Dress","Entertainment","Education",
+    "Misc","Food","Rent","Others"
 ])
 
 amount = st.number_input("Amount", min_value=0)
@@ -109,65 +139,48 @@ if st.button("Add Expense"):
         conn.commit()
         st.success("✅ Expense Added!")
     else:
-        st.warning("⚠️ Enter valid amount")
+        st.warning("Enter valid amount")
 
 st.divider()
 
 # -------------------------------
-# 📊 MONTHLY SUMMARY + DASHBOARD
+# 📊 MONTHLY SUMMARY
 # -------------------------------
-st.subheader("📊 Monthly Summary")
+st.subheader(f"📊 Summary for {selected_month}")
 
 df = pd.read_sql("SELECT * FROM expenses", conn)
 
 if not df.empty:
     df['date'] = pd.to_datetime(df['date'])
 
-    # Get all months
-    months = sorted(df['date'].dt.to_period("M").astype(str).unique(), reverse=True)
-
-    # Default to latest month
-    selected_month = st.selectbox("Select Month", months, index=0)
-
-    # Filter data
     monthly_df = df[df['date'].dt.to_period("M").astype(str) == selected_month]
 
     total_spent = monthly_df['amount'].sum()
-    remaining_after_spend = remaining_budget - total_spent
+    remaining_after = remaining_budget - total_spent
 
-    # Metrics
-    st.metric("💸 Total Spent", f"₹ {total_spent}")
-    st.metric("💰 Remaining Budget", f"₹ {remaining_after_spend}")
+    st.metric("💸 Spent", f"₹ {total_spent}")
+    st.metric("💰 Remaining", f"₹ {remaining_after}")
 
-    # Budget alert
-    if remaining_after_spend < 0:
-        st.error("🚨 You have exceeded your budget!")
-    elif remaining_after_spend < remaining_budget * 0.2:
-        st.warning("⚠️ 80% budget used!")
+    # Alerts
+    if remaining_after < 0:
+        st.error("🚨 Budget exceeded!")
+    elif remaining_after < remaining_budget * 0.2:
+        st.warning("⚠️ 80% budget used")
 
-    # Table
     st.dataframe(monthly_df.sort_values(by="date", ascending=False))
 
-    # -------------------------------
-    # 📊 CATEGORY CHART
-    # -------------------------------
-    st.subheader("📊 Category Breakdown")
-    cat_data = monthly_df.groupby("category")["amount"].sum()
-    st.bar_chart(cat_data)
+    if not monthly_df.empty:
+        # Category chart
+        st.subheader("📊 Category Breakdown")
+        st.bar_chart(monthly_df.groupby("category")["amount"].sum())
 
-    # -------------------------------
-    # 💳 PAYMENT MODE CHART
-    # -------------------------------
-    st.subheader("💳 Payment Mode Usage")
-    pay_data = monthly_df.groupby("payment_mode")["amount"].sum()
-    st.bar_chart(pay_data)
+        # Payment chart
+        st.subheader("💳 Payment Mode Usage")
+        st.bar_chart(monthly_df.groupby("payment_mode")["amount"].sum())
 
-    # -------------------------------
-    # 📈 DAILY TREND
-    # -------------------------------
-    st.subheader("📈 Daily Spending Trend")
-    daily_data = monthly_df.groupby("date")["amount"].sum()
-    st.line_chart(daily_data)
+        # Daily trend
+        st.subheader("📈 Daily Trend")
+        st.line_chart(monthly_df.groupby("date")["amount"].sum())
 
 else:
-    st.info("No expenses yet — start adding!")
+    st.info("No expenses yet")
