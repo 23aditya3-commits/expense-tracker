@@ -195,12 +195,13 @@ if not df.empty:
 
     if not monthly_df.empty:
         st.subheader("💳 Payment Mode Summary")
-
         all_modes = [
             "Cash/Kotak","Amazonpay CC","Ixiago CC","Jupiter CC",
             "Tata Neu CC","Sbi CC","Mom Kotak","Icici CC","Swiggy CC"
         ]
-
+        
+        monthly_df["amount"] = pd.to_numeric(monthly_df["amount"], errors="coerce").fillna(0)
+        
         pivot = (
             monthly_df
             .groupby("payment_mode")["amount"]
@@ -209,9 +210,10 @@ if not df.empty:
             .to_frame()
             .T
         )
-
-        pivot = pivot.applymap(lambda x: f"₹ {x}")
-
+        
+        pivot = pivot.astype(int)
+        pivot = pivot.apply(lambda col: col.map(lambda x: f"₹ {x:,}"))
+        
         st.dataframe(pivot, use_container_width=True)
 
 st.divider()
