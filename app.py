@@ -214,7 +214,7 @@ if not df.empty:
         pivot = pivot.astype(int)
         pivot = pivot.apply(lambda col: col.map(lambda x: f"₹ {x:,}"))
         
-        st.dataframe(pivot, use_container_width=True)
+        st.table(pivot)
 
 st.divider()
 
