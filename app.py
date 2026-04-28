@@ -2,7 +2,6 @@ import streamlit as st
 import sqlite3
 import pandas as pd
 from datetime import date, datetime
-import time
 
 # -------------------------------
 # PAGE CONFIG
@@ -46,28 +45,39 @@ conn.commit()
 st.title("💰 Expense Tracker")
 
 # -------------------------------
-# 📅 MONTH SELECTOR (LAST 6 MONTHS)
+# 📅 MONTH + YEAR SELECTOR
 # -------------------------------
-months = []
-for i in range(6):
-    m = (datetime.now().replace(day=1) - pd.DateOffset(months=i)).strftime("%Y-%m")
-    months.append(m)
+col_m, col_y = st.columns(2)
 
-months = sorted(list(set(months)), reverse=True)
+months_list = [
+    "January","February","March","April","May","June",
+    "July","August","September","October","November","December"
+]
 
-# Format display
-month_map = {m: datetime.strptime(m, "%Y-%m").strftime("%B %Y") for m in months}
-reverse_map = {v: k for k, v in month_map.items()}
+years_list = list(range(2026, 2037))
 
-selected_display = st.selectbox("📅 Select Month", list(month_map.values()))
-selected_month = reverse_map[selected_display]
+with col_m:
+    selected_month_name = st.selectbox(
+        "Month", months_list, index=datetime.now().month - 1
+    )
+
+with col_y:
+    selected_year = st.selectbox(
+        "Year", years_list, index=0
+    )
+
+month_number = months_list.index(selected_month_name) + 1
+selected_month = f"{selected_year}-{month_number:02d}"
+selected_display = f"{selected_month_name} {selected_year}"
 
 st.divider()
 
 # -------------------------------
 # LOAD SETTINGS
 # -------------------------------
-settings = c.execute("SELECT * FROM settings WHERE month=?", (selected_month,)).fetchone()
+settings = c.execute(
+    "SELECT * FROM settings WHERE month=?", (selected_month,)
+).fetchone()
 
 if settings:
     income_db, invest_db, home_db, emi_db = settings[1], settings[2], settings[3], settings[4]
@@ -82,19 +92,43 @@ st.subheader(f"💰 Budget for {selected_display}")
 col1, col2 = st.columns(2)
 
 with col1:
-    income = st.number_input("Monthly Income", value=income_db)
-    investments = st.number_input("Investments", value=invest_db)
+    income = st.number_input(
+        "Monthly Income",
+        value=income_db if income_db != 0 else None,
+        placeholder="Enter income"
+    )
+    investments = st.number_input(
+        "Investments",
+        value=invest_db if invest_db != 0 else None,
+        placeholder="Enter investments"
+    )
 
 with col2:
-    sent_home = st.number_input("Sent to Home", value=home_db)
-    emi = st.number_input("EMI", value=emi_db)
+    sent_home = st.number_input(
+        "Sent to Home",
+        value=home_db if home_db != 0 else None,
+        placeholder="Enter amount"
+    )
+    emi = st.number_input(
+        "EMI",
+        value=emi_db if emi_db != 0 else None,
+        placeholder="Enter EMI"
+    )
+
+# Handle None values
+income = income or 0
+investments = investments or 0
+sent_home = sent_home or 0
+emi = emi or 0
 
 remaining_budget = income - (investments + sent_home + emi)
 st.success(f"💸 Remaining Budget: ₹ {remaining_budget}")
 
 col_save, col_reset = st.columns(2)
 
-# Save
+# -------------------------------
+# SAVE
+# -------------------------------
 with col_save:
     if st.button("💾 Save Budget"):
         c.execute("""
@@ -109,12 +143,14 @@ with col_save:
         conn.commit()
         st.success("✅ Budget Saved!")
 
-# Reset with confirmation + rerun
+# -------------------------------
+# RESET (FIXED)
+# -------------------------------
 with col_reset:
     if st.button("🗑️ Reset Month"):
         st.session_state.confirm_reset = True
 
-if st.session_state.get("confirm_reset"):
+if st.session_state.get("confirm_reset", False):
     st.warning("Are you sure you want to reset this month?")
 
     col_yes, col_no = st.columns(2)
@@ -125,19 +161,19 @@ if st.session_state.get("confirm_reset"):
             c.execute("DELETE FROM expenses WHERE strftime('%Y-%m', date)=?", (selected_month,))
             conn.commit()
 
+            st.session_state.confirm_reset = False
             st.success("✅ Month reset successful!")
-
-            time.sleep(1)
             st.rerun()
 
     with col_no:
         if st.button("❌ Cancel"):
             st.session_state.confirm_reset = False
+            st.rerun()
 
 st.divider()
 
 # -------------------------------
-# 🧾 ADD EXPENSE (SIDE BY SIDE)
+# 🧾 ADD EXPENSE
 # -------------------------------
 st.subheader("🧾 Add Expense")
 
