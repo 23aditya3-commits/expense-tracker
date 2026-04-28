@@ -3,18 +3,20 @@ import sqlite3
 import pandas as pd
 from datetime import date
 
-# Page config (mobile friendly)
+# Page config
 st.set_page_config(page_title="Expense Tracker", layout="centered")
 
 # DB setup
 conn = sqlite3.connect("expenses.db", check_same_thread=False)
 c = conn.cursor()
 
+# UPDATED TABLE (added payment_mode)
 c.execute("""
 CREATE TABLE IF NOT EXISTS expenses (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     amount REAL,
     category TEXT,
+    payment_mode TEXT,
     date TEXT,
     note TEXT
 )
@@ -23,54 +25,86 @@ conn.commit()
 
 st.title("💰 Expense Tracker")
 
-# --- QUICK ADD BUTTONS (1-tap logging) ---
-st.subheader("⚡ Quick Add")
+# =========================
+# 💰 MONTHLY BUDGET SECTION
+# =========================
+st.subheader("💰 Monthly Budget Planner")
 
-col1, col2, col3 = st.columns(3)
+income = st.number_input("Monthly Income", min_value=0)
+investments = st.number_input("Investments", min_value=0)
+sent_home = st.number_input("Sent to Home", min_value=0)
+emi = st.number_input("EMI", min_value=0)
 
-if col1.button("₹100 Food"):
-    c.execute("INSERT INTO expenses (amount, category, date, note) VALUES (?,?,?,?)",
-              (100, "Food", str(date.today()), "Quick"))
-    conn.commit()
-    st.success("Added ₹100 Food")
+remaining_budget = income - (investments + sent_home + emi)
 
-if col2.button("₹200 Travel"):
-    c.execute("INSERT INTO expenses (amount, category, date, note) VALUES (?,?,?,?)",
-              (200, "Travel", str(date.today()), "Quick"))
-    conn.commit()
-    st.success("Added ₹200 Travel")
-
-if col3.button("₹500 Other"):
-    c.execute("INSERT INTO expenses (amount, category, date, note) VALUES (?,?,?,?)",
-              (500, "Other", str(date.today()), "Quick"))
-    conn.commit()
-    st.success("Added ₹500 Other")
+st.success(f"💸 Remaining Budget for Expenses: ₹ {remaining_budget}")
 
 st.divider()
 
-# --- MANUAL ADD ---
-st.subheader("➕ Add Expense")
+# =========================
+# 🧾 EXPENSE ENTRY SECTION
+# =========================
+st.subheader("🧾 Add Expense")
 
-amount = st.number_input("Amount", step=10)
-category = st.selectbox("Category", ["Food", "Travel", "Rent", "Other"])
+# Date (default today)
 exp_date = st.date_input("Date", date.today())
+
+# Payment Mode
+payment_mode = st.selectbox("Mode of Payment", [
+    "Cash/Kotak",
+    "Amazonpay CC",
+    "Ixiago CC",
+    "Jupiter CC",
+    "Tata Neu CC",
+    "Sbi CC",
+    "Mom Kotak",
+    "Icici CC",
+    "Swiggy CC"
+])
+
+# Category
+category = st.selectbox("Category", [
+    "Grocery",
+    "Pets",
+    "Dress",
+    "Entertainment",
+    "Education",
+    "Misc",
+    "Food",
+    "Rent",
+    "Others"
+])
+
+# Amount
+amount = st.number_input("Amount", min_value=0)
+
+# Notes
 note = st.text_input("Note")
 
+# Save Button
 if st.button("Add Expense"):
-    c.execute("INSERT INTO expenses (amount, category, date, note) VALUES (?, ?, ?, ?)",
-              (amount, category, str(exp_date), note))
+    c.execute(
+        "INSERT INTO expenses (amount, category, payment_mode, date, note) VALUES (?, ?, ?, ?, ?)",
+        (amount, category, payment_mode, str(exp_date), note)
+    )
     conn.commit()
-    st.success("Expense added!")
+    st.success("✅ Expense Added!")
 
 st.divider()
 
-# --- VIEW ---
+# =========================
+# 📊 SUMMARY SECTION
+# =========================
 st.subheader("📊 Summary")
 
 df = pd.read_sql("SELECT * FROM expenses", conn)
 
 if not df.empty:
-    st.write("Total Spent:", df['amount'].sum())
+    total_spent = df['amount'].sum()
+
+    st.metric("💸 Total Spent", f"₹ {total_spent}")
+    st.metric("💰 Remaining Budget", f"₹ {remaining_budget - total_spent}")
+
     st.dataframe(df[::-1])  # latest first
 else:
     st.info("No expenses yet")
