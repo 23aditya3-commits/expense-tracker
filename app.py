@@ -2,6 +2,7 @@ import streamlit as st
 import sqlite3
 import pandas as pd
 from datetime import date, datetime
+import time
 
 # -------------------------------
 # PAGE CONFIG
@@ -45,21 +46,16 @@ conn.commit()
 st.title("💰 Expense Tracker")
 
 # -------------------------------
-# 📅 MONTH SELECTOR
+# 📅 MONTH SELECTOR (LAST 6 MONTHS)
 # -------------------------------
-current_month = datetime.now().strftime("%Y-%m")
+months = []
+for i in range(6):
+    m = (datetime.now().replace(day=1) - pd.DateOffset(months=i)).strftime("%Y-%m")
+    months.append(m)
 
-df_all = pd.read_sql("SELECT * FROM expenses", conn)
+months = sorted(list(set(months)), reverse=True)
 
-if not df_all.empty:
-    df_all['date'] = pd.to_datetime(df_all['date'])
-    months = sorted(df_all['date'].dt.to_period("M").astype(str).unique(), reverse=True)
-    if current_month not in months:
-        months.insert(0, current_month)
-else:
-    months = [current_month]
-
-# 👉 Convert to readable format
+# Format display
 month_map = {m: datetime.strptime(m, "%Y-%m").strftime("%B %Y") for m in months}
 reverse_map = {v: k for k, v in month_map.items()}
 
@@ -113,15 +109,30 @@ with col_save:
         conn.commit()
         st.success("✅ Budget Saved!")
 
-# Reset with confirmation
+# Reset with confirmation + rerun
 with col_reset:
     if st.button("🗑️ Reset Month"):
-        st.warning("Are you sure you want to reset this month?")
-        if st.button("✅ Confirm Reset"):
+        st.session_state.confirm_reset = True
+
+if st.session_state.get("confirm_reset"):
+    st.warning("Are you sure you want to reset this month?")
+
+    col_yes, col_no = st.columns(2)
+
+    with col_yes:
+        if st.button("✅ Yes, Reset"):
             c.execute("DELETE FROM settings WHERE month=?", (selected_month,))
             c.execute("DELETE FROM expenses WHERE strftime('%Y-%m', date)=?", (selected_month,))
             conn.commit()
-            st.success("🔄 Month reset done! Refresh page.")
+
+            st.success("✅ Month reset successful!")
+
+            time.sleep(1)
+            st.rerun()
+
+    with col_no:
+        if st.button("❌ Cancel"):
+            st.session_state.confirm_reset = False
 
 st.divider()
 
@@ -156,6 +167,7 @@ if st.button("Add Expense"):
         )
         conn.commit()
         st.success("✅ Expense Added!")
+        st.rerun()
     else:
         st.warning("Enter valid amount")
 
@@ -173,7 +185,7 @@ if not df.empty:
 
     monthly_df = df[df['date'].dt.to_period("M").astype(str) == selected_month]
 
-    total_spent = monthly_df['amount'].sum()
+    total_spent = monthly_df['amount'].sum() if not monthly_df.empty else 0
     remaining_after = remaining_budget - total_spent
 
     st.metric("💸 Spent", f"₹ {total_spent}")
@@ -181,10 +193,13 @@ if not df.empty:
 
     if remaining_after < 0:
         st.error("🚨 Budget exceeded!")
-    elif remaining_after < remaining_budget * 0.2:
+    elif remaining_after < remaining_budget * 0.2 and remaining_budget > 0:
         st.warning("⚠️ 80% budget used")
 
-    st.dataframe(monthly_df.sort_values(by="date", ascending=False))
+    if not monthly_df.empty:
+        st.dataframe(monthly_df.sort_values(by="date", ascending=False))
+    else:
+        st.info("No expenses for this month")
 
 else:
     st.info("No expenses yet")
