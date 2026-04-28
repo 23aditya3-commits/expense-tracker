@@ -2,6 +2,7 @@ import streamlit as st
 import sqlite3
 import pandas as pd
 from datetime import date, datetime
+import time
 
 # -------------------------------
 # PAGE CONFIG
@@ -45,39 +46,27 @@ conn.commit()
 st.title("💰 Expense Tracker")
 
 # -------------------------------
-# 📅 MONTH + YEAR SELECTOR
+# 📅 MONTH SELECTOR
 # -------------------------------
-col_m, col_y = st.columns(2)
+months = []
+for i in range(6):
+    m = (datetime.now().replace(day=1) - pd.DateOffset(months=i)).strftime("%Y-%m")
+    months.append(m)
 
-months_list = [
-    "January","February","March","April","May","June",
-    "July","August","September","October","November","December"
-]
+months = sorted(list(set(months)), reverse=True)
 
-years_list = list(range(2026, 2037))
+month_map = {m: datetime.strptime(m, "%Y-%m").strftime("%B %Y") for m in months}
+reverse_map = {v: k for k, v in month_map.items()}
 
-with col_m:
-    selected_month_name = st.selectbox(
-        "Month", months_list, index=datetime.now().month - 1
-    )
-
-with col_y:
-    selected_year = st.selectbox(
-        "Year", years_list, index=0
-    )
-
-month_number = months_list.index(selected_month_name) + 1
-selected_month = f"{selected_year}-{month_number:02d}"
-selected_display = f"{selected_month_name} {selected_year}"
+selected_display = st.selectbox("📅 Select Month", list(month_map.values()))
+selected_month = reverse_map[selected_display]
 
 st.divider()
 
 # -------------------------------
 # LOAD SETTINGS
 # -------------------------------
-settings = c.execute(
-    "SELECT * FROM settings WHERE month=?", (selected_month,)
-).fetchone()
+settings = c.execute("SELECT * FROM settings WHERE month=?", (selected_month,)).fetchone()
 
 if settings:
     income_db, invest_db, home_db, emi_db = settings[1], settings[2], settings[3], settings[4]
@@ -92,30 +81,14 @@ st.subheader(f"💰 Budget for {selected_display}")
 col1, col2 = st.columns(2)
 
 with col1:
-    income = st.number_input(
-        "Monthly Income",
-        value=income_db if income_db != 0 else None,
-        placeholder="Enter income"
-    )
-    investments = st.number_input(
-        "Investments",
-        value=invest_db if invest_db != 0 else None,
-        placeholder="Enter investments"
-    )
+    income = st.number_input("Monthly Income", value=income_db if income_db != 0 else None, placeholder="Enter income")
+    investments = st.number_input("Investments", value=invest_db if invest_db != 0 else None, placeholder="Enter investments")
 
 with col2:
-    sent_home = st.number_input(
-        "Sent to Home",
-        value=home_db if home_db != 0 else None,
-        placeholder="Enter amount"
-    )
-    emi = st.number_input(
-        "EMI",
-        value=emi_db if emi_db != 0 else None,
-        placeholder="Enter EMI"
-    )
+    sent_home = st.number_input("Sent to Home", value=home_db if home_db != 0 else None, placeholder="Enter amount")
+    emi = st.number_input("EMI", value=emi_db if emi_db != 0 else None, placeholder="Enter EMI")
 
-# Handle None values
+# Handle None
 income = income or 0
 investments = investments or 0
 sent_home = sent_home or 0
@@ -126,9 +99,7 @@ st.success(f"💸 Remaining Budget: ₹ {remaining_budget}")
 
 col_save, col_reset = st.columns(2)
 
-# -------------------------------
 # SAVE
-# -------------------------------
 with col_save:
     if st.button("💾 Save Budget"):
         c.execute("""
@@ -143,9 +114,7 @@ with col_save:
         conn.commit()
         st.success("✅ Budget Saved!")
 
-# -------------------------------
-# RESET (FIXED)
-# -------------------------------
+# RESET
 with col_reset:
     if st.button("🗑️ Reset Month"):
         st.session_state.confirm_reset = True
@@ -191,12 +160,17 @@ with col2:
         "Cash/Kotak","Amazonpay CC","Ixiago CC","Jupiter CC",
         "Tata Neu CC","Sbi CC","Mom Kotak","Icici CC","Swiggy CC"
     ])
-    amount = st.number_input("Amount", min_value=0)
+    amount = st.number_input(
+        "Amount",
+        value=None,
+        placeholder="Enter amount",
+        min_value=0
+    )
 
 note = st.text_input("Note")
 
 if st.button("Add Expense"):
-    if amount > 0:
+    if amount and amount > 0:
         c.execute(
             "INSERT INTO expenses (amount, category, payment_mode, date, note) VALUES (?, ?, ?, ?, ?)",
             (amount, category, payment_mode, str(exp_date), note)
@@ -210,10 +184,8 @@ if st.button("Add Expense"):
 st.divider()
 
 # -------------------------------
-# 📊 SUMMARY
+# 📊 PAYMENT MODE PIVOT TABLE
 # -------------------------------
-st.subheader(f"📊 Summary for {selected_display}")
-
 df = pd.read_sql("SELECT * FROM expenses", conn)
 
 if not df.empty:
@@ -221,6 +193,35 @@ if not df.empty:
 
     monthly_df = df[df['date'].dt.to_period("M").astype(str) == selected_month]
 
+    if not monthly_df.empty:
+        st.subheader("💳 Payment Mode Summary")
+
+        all_modes = [
+            "Cash/Kotak","Amazonpay CC","Ixiago CC","Jupiter CC",
+            "Tata Neu CC","Sbi CC","Mom Kotak","Icici CC","Swiggy CC"
+        ]
+
+        pivot = (
+            monthly_df
+            .groupby("payment_mode")["amount"]
+            .sum()
+            .reindex(all_modes, fill_value=0)
+            .to_frame()
+            .T
+        )
+
+        pivot = pivot.applymap(lambda x: f"₹ {x}")
+
+        st.dataframe(pivot, use_container_width=True)
+
+st.divider()
+
+# -------------------------------
+# 📊 SUMMARY
+# -------------------------------
+st.subheader(f"📊 Summary for {selected_display}")
+
+if not df.empty:
     total_spent = monthly_df['amount'].sum() if not monthly_df.empty else 0
     remaining_after = remaining_budget - total_spent
 
