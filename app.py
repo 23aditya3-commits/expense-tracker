@@ -47,16 +47,34 @@ conn.commit()
 st.title("💰 Expense Tracker")
 
 # -------------------------------
-# 📅 MONTH SELECTOR (MOBILE SAFE)
+# 📅 MONTH + YEAR SELECTOR (FIXED)
 # -------------------------------
-months = [(datetime.now().replace(day=1) - pd.DateOffset(months=i)).strftime("%Y-%m") for i in range(6)]
-months = sorted(months, reverse=True)
+col_m, col_y = st.columns(2)
 
-month_map = {m: datetime.strptime(m, "%Y-%m").strftime("%b %Y") for m in months}
-reverse_map = {v: k for k, v in month_map.items()}
+months_list = [
+    "January","February","March","April","May","June",
+    "July","August","September","October","November","December"
+]
 
-selected_display = st.selectbox("Month", list(month_map.values()))
-selected_month = reverse_map[selected_display]
+years_list = list(range(2024, 2037))
+
+with col_m:
+    selected_month_name = st.selectbox(
+        "Month",
+        months_list,
+        index=datetime.now().month - 1
+    )
+
+with col_y:
+    selected_year = st.selectbox(
+        "Year",
+        years_list,
+        index=years_list.index(datetime.now().year)
+    )
+
+month_number = months_list.index(selected_month_name) + 1
+selected_month = f"{selected_year}-{month_number:02d}"
+selected_display = f"{selected_month_name} {selected_year}"
 
 st.divider()
 
@@ -172,11 +190,12 @@ st.divider()
 df = pd.read_sql("SELECT * FROM expenses", conn)
 
 if not df.empty:
-    df['date'] = pd.to_datetime(df['date'])
+    df['date'] = pd.to_datetime(df['date'], errors='coerce')  # ✅ FIX
+
     monthly_df = df[df['date'].dt.to_period("M").astype(str) == selected_month]
 
     # -------------------------------
-    # 💳 PAYMENT TABLE (NO SCROLL)
+    # 💳 PAYMENT TABLE
     # -------------------------------
     st.subheader("💳 Payments")
 
@@ -193,7 +212,7 @@ if not df.empty:
 
     pivot = pivot.astype(int)
 
-    st.table(pivot)  # ✅ mobile fit
+    st.table(pivot)
 
     st.divider()
 
