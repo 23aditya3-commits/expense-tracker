@@ -310,6 +310,9 @@ if not df.empty:
     # -------------------------------
     # 📊 MONTHLY BAR CHART
     # -------------------------------
+    # -------------------------------
+# 📊 IMPROVED MONTHLY BAR CHART
+# -------------------------------
     st.divider()
     st.subheader("📊 Monthly Overview (Income vs Total Spend)")
 
@@ -317,14 +320,18 @@ if not df.empty:
     set_df = pd.read_sql("SELECT * FROM settings", conn)
 
     if not set_df.empty:
+
+        # Prepare expense data
         exp_df['date'] = pd.to_datetime(exp_df['date'], errors='coerce')
         exp_df['month'] = exp_df['date'].dt.to_period("M").astype(str)
 
         expense_summary = exp_df.groupby("month")["amount"].sum().reset_index()
 
+        # Merge
         merged = pd.merge(set_df, expense_summary, on="month", how="left")
         merged["amount"] = merged["amount"].fillna(0)
 
+        # Total Spend Calculation
         merged["total_spend"] = (
             merged["amount"] +
             merged["investments"] +
@@ -332,9 +339,22 @@ if not df.empty:
             merged["sent_home"]
         )
 
-        chart_df = merged[["month", "income", "total_spend"]].set_index("month")
+        # 👉 Convert month to readable format
+        merged["month_name"] = pd.to_datetime(merged["month"]).dt.strftime("%b %Y")
+
+        # 👉 Sort properly
+        merged = merged.sort_values("month")
+
+        # 👉 Better chart dataframe
+        chart_df = merged[["month_name", "income", "total_spend"]]
+
+        chart_df = chart_df.set_index("month_name")
+
+        # 👉 Rename columns for clarity
+        chart_df.columns = ["Income 💰", "Total Spend 💸"]
 
         st.bar_chart(chart_df)
+
     else:
         st.info("No monthly data available")
 
