@@ -2,6 +2,7 @@ import streamlit as st
 import sqlite3
 import pandas as pd
 from datetime import date, datetime
+import json
 
 # -------------------------------
 # PAGE CONFIG (MOBILE FRIENDLY)
@@ -40,6 +41,26 @@ CREATE TABLE IF NOT EXISTS settings (
 """)
 
 conn.commit()
+
+# -------------------------------
+# 🔁 AUTO BACKUP (FULL DATA)
+# -------------------------------
+def auto_backup():
+    try:
+        expenses_df = pd.read_sql("SELECT * FROM expenses", conn)
+        settings_df = pd.read_sql("SELECT * FROM settings", conn)
+
+        backup_data = {
+            "expenses": expenses_df.to_dict(orient="records"),
+            "settings": settings_df.to_dict(orient="records")
+        }
+
+        with open("backup.json", "w") as f:
+            json.dump(backup_data, f)
+    except:
+        pass
+
+auto_backup()
 
 # -------------------------------
 # TITLE
@@ -185,12 +206,73 @@ if st.button("Add"):
 st.divider()
 
 # -------------------------------
+# 📥 BACKUP DOWNLOAD
+# -------------------------------
+st.subheader("📥 Backup")
+
+try:
+    with open("backup.json", "rb") as f:
+        st.download_button(
+            label="⬇️ Download Full Backup",
+            data=f,
+            file_name="expense_backup.json",
+            mime="application/json"
+        )
+except:
+    st.info("No backup available")
+
+# -------------------------------
+# ♻️ RESTORE
+# -------------------------------
+st.subheader("♻️ Restore Backup")
+
+uploaded_file = st.file_uploader("Upload backup.json", type=["json"])
+
+if uploaded_file is not None:
+    backup_data = json.load(uploaded_file)
+
+    st.warning("⚠️ This will overwrite ALL data!")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        if st.button("✅ Confirm Restore"):
+            try:
+                c.execute("DELETE FROM expenses")
+                c.execute("DELETE FROM settings")
+
+                for row in backup_data.get("expenses", []):
+                    c.execute(
+                        "INSERT INTO expenses (id, amount, category, payment_mode, date, note) VALUES (?, ?, ?, ?, ?, ?)",
+                        (row["id"], row["amount"], row["category"], row["payment_mode"], row["date"], row["note"])
+                    )
+
+                for row in backup_data.get("settings", []):
+                    c.execute(
+                        "INSERT INTO settings (month, income, investments, sent_home, emi) VALUES (?, ?, ?, ?, ?)",
+                        (row["month"], row["income"], row["investments"], row["sent_home"], row["emi"])
+                    )
+
+                conn.commit()
+                st.success("✅ Full data restored!")
+                st.rerun()
+
+            except Exception as e:
+                st.error(f"Restore failed: {e}")
+
+    with col2:
+        if st.button("❌ Cancel Restore"):
+            st.info("Restore cancelled")
+
+st.divider()
+
+# -------------------------------
 # 📊 DATA
 # -------------------------------
 df = pd.read_sql("SELECT * FROM expenses", conn)
 
 if not df.empty:
-    df['date'] = pd.to_datetime(df['date'], errors='coerce')  # ✅ FIX
+    df['date'] = pd.to_datetime(df['date'], errors='coerce')
 
     monthly_df = df[df['date'].dt.to_period("M").astype(str) == selected_month]
 
