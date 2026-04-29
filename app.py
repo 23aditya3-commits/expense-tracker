@@ -372,11 +372,12 @@ if not df.empty:
         )
 
         fig.update_layout(
-            barmode='group',   # 🔥 THIS is the key fix
+            barmode='group',
             xaxis_title="Month",
             yaxis_title="Amount (₹)",
             legend_title="",
-            height=400
+            height=350,  # smaller = mobile friendly
+            xaxis=dict(tickangle=-45)
         )
 
         st.plotly_chart(fig, use_container_width=True)
