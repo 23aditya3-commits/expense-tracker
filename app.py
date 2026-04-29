@@ -3,6 +3,7 @@ import sqlite3
 import pandas as pd
 from datetime import date, datetime
 import json
+import plotly.graph_objects as go
 
 # -------------------------------
 # PAGE CONFIG (MOBILE FRIENDLY)
@@ -316,6 +317,11 @@ if not df.empty:
     # -------------------------------
 # 📊 FIXED MONTHLY BAR CHART
 # -------------------------------
+    # -------------------------------
+# 📊 CLEAN MONTHLY BAR CHART (PLOTLY)
+# -------------------------------
+
+
     st.divider()
     st.subheader("📊 Monthly Overview (Income vs Total Spend)")
 
@@ -334,7 +340,7 @@ if not df.empty:
         merged = pd.merge(set_df, expense_summary, on="month", how="left")
         merged["amount"] = merged["amount"].fillna(0)
 
-        # Total Spend = ALL outflows
+        # Total Spend
         merged["total_spend"] = (
             merged["amount"] +
             merged["investments"] +
@@ -342,31 +348,38 @@ if not df.empty:
             merged["sent_home"]
         )
 
-        # 👉 Format month properly
+        # Format month
         merged["month_name"] = pd.to_datetime(merged["month"]).dt.strftime("%b %Y")
 
-        # 👉 Sort
+        # Sort
         merged = merged.sort_values("month")
 
-        # 👉 Melt for proper side-by-side bars
-        chart_df = merged.melt(
-            id_vars="month_name",
-            value_vars=["income", "total_spend"],
-            var_name="Type",
-            value_name="Amount"
+        # -------------------------------
+        # 👉 REAL SIDE-BY-SIDE BARS
+        # -------------------------------
+        fig = go.Figure()
+
+        fig.add_bar(
+            x=merged["month_name"],
+            y=merged["income"],
+            name="Income 💰"
         )
 
-        # Rename for UI
-        chart_df["Type"] = chart_df["Type"].replace({
-            "income": "Income 💰",
-            "total_spend": "Total Spend 💸"
-        })
+        fig.add_bar(
+            x=merged["month_name"],
+            y=merged["total_spend"],
+            name="Total Spend 💸"
+        )
 
-        # Pivot to fix visual stacking issue
-        chart_df = chart_df.pivot(index="month_name", columns="Type", values="Amount")
+        fig.update_layout(
+            barmode='group',   # 🔥 THIS is the key fix
+            xaxis_title="Month",
+            yaxis_title="Amount (₹)",
+            legend_title="",
+            height=400
+        )
 
-        # 👉 THIS ensures bars are separate (not added)
-        st.bar_chart(chart_df, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True)
 
     else:
         st.info("No monthly data available")
