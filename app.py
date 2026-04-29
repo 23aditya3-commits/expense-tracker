@@ -313,6 +313,41 @@ if not df.empty:
         st.dataframe(monthly_df.sort_values(by="date", ascending=False), use_container_width=True)
     else:
         st.info("No data")
+    # -------------------------------
+# 📊 MONTHLY BAR CHART (INCOME vs TOTAL SPEND)
+# -------------------------------
+st.divider()
+st.subheader("📊 Monthly Overview (Income vs Total Spend)")
+
+exp_df = pd.read_sql("SELECT * FROM expenses", conn)
+set_df = pd.read_sql("SELECT * FROM settings", conn)
+
+if not set_df.empty:
+
+    # Prepare expense data
+    exp_df['date'] = pd.to_datetime(exp_df['date'], errors='coerce')
+    exp_df['month'] = exp_df['date'].dt.to_period("M").astype(str)
+
+    expense_summary = exp_df.groupby("month")["amount"].sum().reset_index()
+
+    # Merge with settings
+    merged = pd.merge(set_df, expense_summary, on="month", how="left")
+    merged["amount"] = merged["amount"].fillna(0)
+
+    # Total spend = expenses + investments + emi + sent_home
+    merged["total_spend"] = (
+        merged["amount"] +
+        merged["investments"] +
+        merged["emi"] +
+        merged["sent_home"]
+    )
+
+    chart_df = merged[["month", "income", "total_spend"]].set_index("month")
+
+    st.bar_chart(chart_df)
+
+else:
+    st.info("No monthly data available")
 
 else:
     st.info("No expenses yet")
