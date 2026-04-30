@@ -25,13 +25,20 @@ SCOPES = [
 
 @st.cache_resource
 def get_sheet():
-    creds_dict = json.loads(st.secrets["gcp"]["json"])
+    creds_dict = {
+        "type": st.secrets["gcp"]["type"],
+        "project_id": st.secrets["gcp"]["project_id"],
+        "private_key_id": st.secrets["gcp"]["private_key_id"],
+        "private_key": st.secrets["gcp"]["private_key"],
+        "client_email": st.secrets["gcp"]["client_email"],
+        "client_id": st.secrets["gcp"]["client_id"],
+        "auth_uri": st.secrets["gcp"]["auth_uri"],
+        "token_uri": st.secrets["gcp"]["token_uri"],
+    }
     creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
     client = gspread.authorize(creds)
     sheet = client.open(st.secrets["sheets"]["sheet_name"])
     return sheet
-
-sheet = get_sheet()
 
 # -------------------------------
 # 📋 SHEET HELPERS
