@@ -5,7 +5,6 @@ from google.oauth2.service_account import Credentials
 import json
 import plotly.graph_objects as go
 import gspread
-from gspread.exceptions import WorksheetNotFound
 
 # -------------------------------
 # PAGE CONFIG (MOBILE FRIENDLY)
@@ -38,19 +37,20 @@ def get_sheet():
     }
     creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
     client = gspread.authorize(creds)
-    sheet = client.open(st.secrets["sheets"]["sheet_name"])
-    return sheet
+    return client.open(st.secrets["sheets"]["sheet_name"])
+
+# FIX: assign sheet at module level so all functions can use it
+sheet = get_sheet()
 
 # -------------------------------
 # 📋 SHEET HELPERS
-# Each tab = one "table": expenses, settings, app_meta
 # -------------------------------
 
 def get_ws(name):
     headers_map = {
-        "expenses": ["id","amount","category","payment_mode","date","note"],
-        "settings": ["month","income","investments","sent_home","emi"],
-        "app_meta": ["key","value"]
+        "expenses": ["id", "amount", "category", "payment_mode", "date", "note"],
+        "settings": ["month", "income", "investments", "sent_home", "emi"],
+        "app_meta": ["key", "value"]
     }
     ws_list = [w.title for w in sheet.worksheets()]
     if name not in ws_list:
@@ -65,7 +65,7 @@ def load_expenses():
     ws = get_ws("expenses")
     data = ws.get_all_records()
     if not data:
-        return pd.DataFrame(columns=["id","amount","category","payment_mode","date","note"])
+        return pd.DataFrame(columns=["id", "amount", "category", "payment_mode", "date", "note"])
     return pd.DataFrame(data)
 
 def add_expense(amount, category, payment_mode, exp_date, note):
@@ -75,7 +75,8 @@ def add_expense(amount, category, payment_mode, exp_date, note):
     ws.append_row([new_id, amount, category, payment_mode, exp_date, note])
 
 def delete_expenses_for_month(month_str):
-    ws = ("expenses")
+    # FIX: was ws = ("expenses") — missing get_ws()
+    ws = get_ws("expenses")
     all_vals = ws.get_all_values()
     if len(all_vals) <= 1:
         return
@@ -91,7 +92,7 @@ def delete_expenses_for_month(month_str):
 def delete_all_expenses():
     ws = get_ws("expenses")
     ws.clear()
-    ws.append_row(["id","amount","category","payment_mode","date","note"])
+    ws.append_row(["id", "amount", "category", "payment_mode", "date", "note"])
 
 # ---- SETTINGS ----
 
@@ -99,7 +100,7 @@ def load_settings():
     ws = get_ws("settings")
     data = ws.get_all_records()
     if not data:
-        return pd.DataFrame(columns=["month","income","investments","sent_home","emi"])
+        return pd.DataFrame(columns=["month", "income", "investments", "sent_home", "emi"])
     return pd.DataFrame(data)
 
 def get_settings_for_month(month_str):
@@ -139,7 +140,7 @@ def delete_settings_for_month(month_str):
 def delete_all_settings():
     ws = get_ws("settings")
     ws.clear()
-    ws.append_row(["month","income","investments","sent_home","emi"])
+    ws.append_row(["month", "income", "investments", "sent_home", "emi"])
 
 # ---- APP META ----
 
@@ -210,8 +211,8 @@ if "selected_year" not in st.session_state:
 col_m, col_y = st.columns(2)
 
 months_list = [
-    "January","February","March","April","May","June",
-    "July","August","September","October","November","December"
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December"
 ]
 
 years_list = list(range(2024, 2037))
@@ -320,12 +321,12 @@ col1, col2 = st.columns(2)
 with col1:
     exp_date = st.date_input("Date", date.today())
     category = st.selectbox("Category", [
-        "Grocery","Pets","Dress","Fun","Edu","Misc","Food","Rent","Other"
+        "Grocery", "Pets", "Dress", "Fun", "Edu", "Misc", "Food", "Rent", "Other"
     ])
 
 with col2:
     payment_mode = st.selectbox("Mode", [
-        "Cash","Amazon","Ixiago","Jupiter","TataNeu","SBI","Mom","ICICI","Swiggy"
+        "Cash", "Amazon", "Ixiago", "Jupiter", "TataNeu", "SBI", "Mom", "ICICI", "Swiggy"
     ])
     amount = st.number_input("Amount", value=None, placeholder="₹", min_value=0)
 
@@ -342,7 +343,6 @@ st.divider()
 
 # -------------------------------
 # 📥 BACKUP DOWNLOAD
-# Google Sheets is persistent, but JSON export still available
 # -------------------------------
 st.subheader("📥 Backup")
 
@@ -428,7 +428,7 @@ if not df.empty:
 
     st.subheader("💳 Payments")
 
-    all_modes = ["Cash","Amazon","Ixiago","Jupiter","TataNeu","SBI","Mom","ICICI","Swiggy"]
+    all_modes = ["Cash", "Amazon", "Ixiago", "Jupiter", "TataNeu", "SBI", "Mom", "ICICI", "Swiggy"]
 
     pivot = (
         monthly_df.groupby("payment_mode")["amount"]
@@ -467,7 +467,7 @@ if not df.empty:
         df['month'] = df['date'].dt.to_period("M").astype(str)
         expense_summary = df.groupby("month")["amount"].sum().reset_index()
 
-        for col in ["income","investments","emi","sent_home"]:
+        for col in ["income", "investments", "emi", "sent_home"]:
             set_df[col] = pd.to_numeric(set_df[col], errors="coerce").fillna(0)
 
         merged = pd.merge(set_df, expense_summary, on="month", how="left")
