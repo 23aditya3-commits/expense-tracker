@@ -15,6 +15,8 @@ st.set_page_config(
     layout="centered"
 )
 
+st.write(dict(st.secrets))
+
 # -------------------------------
 # 🔑 GOOGLE SHEETS CONNECTION
 # -------------------------------
@@ -22,6 +24,7 @@ SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive"
 ]
+
 
 @st.cache_resource
 def get_sheet():
