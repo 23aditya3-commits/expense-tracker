@@ -400,6 +400,11 @@ if st.button("📦 Generate Backup"):
     try:
         exp_df = load_expenses()
         set_df = load_settings()
+
+        # Convert all columns to string-safe types before JSON serialization
+        exp_df = exp_df.copy()
+        exp_df["date"] = exp_df["date"].astype(str)
+
         backup_data = {
             "expenses": exp_df.to_dict(orient="records"),
             "settings": set_df.to_dict(orient="records")
