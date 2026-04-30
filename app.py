@@ -2,6 +2,7 @@ import streamlit as st
 import sqlite3
 import pandas as pd
 from datetime import date, datetime
+from pathlib import Path
 import json
 import plotly.graph_objects as go
 
@@ -15,11 +16,18 @@ st.set_page_config(
 )
 
 # -------------------------------
-# DB SETUP
+# 🔑 PERSISTENT PATHS
+# Fix: use absolute home-dir paths so DB survives Streamlit restarts
 # -------------------------------
-conn = sqlite3.connect("expenses.db", check_same_thread=False)
+DB_PATH = str(Path.home() / "expenses.db")
+BACKUP_PATH = str(Path.home() / "expense_backup.json")
+
+conn = sqlite3.connect(DB_PATH, check_same_thread=False)
 c = conn.cursor()
 
+# -------------------------------
+# DB SETUP
+# -------------------------------
 c.execute("""
 CREATE TABLE IF NOT EXISTS expenses (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -41,10 +49,18 @@ CREATE TABLE IF NOT EXISTS settings (
 )
 """)
 
+# Tracks the last month the app was opened — used for new-month rollover detection
+c.execute("""
+CREATE TABLE IF NOT EXISTS app_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT
+)
+""")
+
 conn.commit()
 
 # -------------------------------
-# 🔁 AUTO BACKUP (FULL DATA)
+# 🔁 AUTO BACKUP (FULL DATA) — to persistent path
 # -------------------------------
 def auto_backup():
     try:
@@ -56,12 +72,58 @@ def auto_backup():
             "settings": settings_df.to_dict(orient="records")
         }
 
-        with open("backup.json", "w") as f:
+        with open(BACKUP_PATH, "w") as f:
             json.dump(backup_data, f)
-    except:
+    except Exception:
         pass
 
 auto_backup()
+
+# -------------------------------
+# 🗓️ NEW MONTH AUTO-RESET
+# On first open of a new calendar month:
+#   - Clear all expenses for the new month (shouldn't be any, but defensive)
+#   - Carry forward budget settings from last month into new month
+#   - Update last_seen_month in app_meta
+# Does NOT touch past months' data.
+# -------------------------------
+def get_meta(key):
+    row = c.execute("SELECT value FROM app_meta WHERE key=?", (key,)).fetchone()
+    return row[0] if row else None
+
+def set_meta(key, value):
+    c.execute("""
+        INSERT INTO app_meta (key, value) VALUES (?, ?)
+        ON CONFLICT(key) DO UPDATE SET value=excluded.value
+    """, (key, value))
+    conn.commit()
+
+today = datetime.now()
+current_month_str = today.strftime("%Y-%m")  # e.g. "2025-07"
+last_seen = get_meta("last_seen_month")
+
+if last_seen is None:
+    # First ever open — just record current month
+    set_meta("last_seen_month", current_month_str)
+
+elif last_seen != current_month_str:
+    # New month detected!
+    # 1. Carry forward settings from last month to new month (if new month has no settings yet)
+    existing_new = c.execute("SELECT 1 FROM settings WHERE month=?", (current_month_str,)).fetchone()
+    if not existing_new:
+        last_settings = c.execute("SELECT * FROM settings WHERE month=?", (last_seen,)).fetchone()
+        if last_settings:
+            # Carry forward income/investments/sent_home/emi, reset expenses implicitly (new month = no entries)
+            c.execute("""
+                INSERT INTO settings (month, income, investments, sent_home, emi)
+                VALUES (?, ?, ?, ?, ?)
+            """, (current_month_str, last_settings[1], last_settings[2], last_settings[3], last_settings[4]))
+            conn.commit()
+
+    # 2. Update last_seen so this only runs once per month
+    set_meta("last_seen_month", current_month_str)
+
+    st.toast(f"🎉 New month! Budget carried forward from {last_seen}. Expenses reset.", icon="📅")
 
 # -------------------------------
 # TITLE
@@ -69,7 +131,7 @@ auto_backup()
 st.title("💰 Expense Tracker")
 
 # -------------------------------
-# 📅 MONTH + YEAR SELECTOR (FIXED + SESSION LOCK)
+# 📅 MONTH + YEAR SELECTOR
 # -------------------------------
 if "selected_month" not in st.session_state:
     st.session_state.selected_month = datetime.now().month
@@ -100,7 +162,6 @@ with col_y:
         index=years_list.index(st.session_state.selected_year)
     )
 
-# store back
 st.session_state.selected_month = months_list.index(selected_month_name) + 1
 st.session_state.selected_year = selected_year
 
@@ -116,7 +177,7 @@ st.divider()
 # LOAD SETTINGS
 # -------------------------------
 settings = c.execute("SELECT * FROM settings WHERE month=?", (selected_month,)).fetchone()
-income_db, invest_db, home_db, emi_db = (settings[1:5] if settings else (0,0,0,0))
+income_db, invest_db, home_db, emi_db = (settings[1:5] if settings else (0, 0, 0, 0))
 
 # -------------------------------
 # 💰 BUDGET
@@ -138,12 +199,20 @@ investments = investments or 0
 sent_home = sent_home or 0
 emi = emi or 0
 
+# Load actual expenses for this month to show accurate "left" budget
+_expenses_now = pd.read_sql(
+    "SELECT amount FROM expenses WHERE strftime('%Y-%m', date)=?",
+    conn, params=(selected_month,)
+)
+total_spent_now = float(_expenses_now["amount"].sum()) if not _expenses_now.empty else 0.0
+
 remaining_budget = income - (investments + sent_home + emi)
-st.success(f"💸 Left: ₹ {remaining_budget}")
+remaining_after_expenses = remaining_budget - total_spent_now
+
+st.success(f"💸 Spendable: ₹{remaining_budget:,.0f}  |  After expenses: ₹{remaining_after_expenses:,.0f}")
 
 col_save, col_reset = st.columns(2)
 
-# SAVE
 with col_save:
     if st.button("💾 Save"):
         c.execute("""
@@ -156,9 +225,9 @@ with col_save:
         emi=excluded.emi
         """, (selected_month, income, investments, sent_home, emi))
         conn.commit()
-        st.success("Saved")
+        auto_backup()
+        st.success("Saved ✅")
 
-# RESET
 with col_reset:
     if st.button("🗑 Reset"):
         st.session_state.confirm = True
@@ -173,6 +242,7 @@ if st.session_state.get("confirm"):
             c.execute("DELETE FROM settings WHERE month=?", (selected_month,))
             c.execute("DELETE FROM expenses WHERE strftime('%Y-%m', date)=?", (selected_month,))
             conn.commit()
+            auto_backup()
             st.session_state.confirm = False
             st.rerun()
 
@@ -208,9 +278,10 @@ if st.button("Add"):
     if amount and amount > 0:
         c.execute(
             "INSERT INTO expenses (amount, category, payment_mode, date, note) VALUES (?, ?, ?, ?, ?)",
-            (amount, category, payment_mode, exp_date.strftime("%Y-%m-%d"), note)  # FIXED
+            (amount, category, payment_mode, exp_date.strftime("%Y-%m-%d"), note)
         )
         conn.commit()
+        auto_backup()
         st.rerun()
     else:
         st.warning("Enter amount")
@@ -223,22 +294,22 @@ st.divider()
 st.subheader("📥 Backup")
 
 try:
-    with open("backup.json", "rb") as f:
+    with open(BACKUP_PATH, "rb") as f:
         st.download_button(
             label="⬇️ Download Full Backup",
             data=f,
             file_name="expense_backup.json",
             mime="application/json"
         )
-except:
-    st.info("No backup available")
+except Exception:
+    st.info("No backup available yet")
 
 # -------------------------------
 # ♻️ RESTORE
 # -------------------------------
 st.subheader("♻️ Restore Backup")
 
-uploaded_file = st.file_uploader( "Upload backup.json", type=["json"], key="file_uploader" )
+uploaded_file = st.file_uploader("Upload backup.json", type=["json"], key="file_uploader")
 
 if uploaded_file is not None:
     backup_data = json.load(uploaded_file)
@@ -266,10 +337,10 @@ if uploaded_file is not None:
                     )
 
                 conn.commit()
+                auto_backup()
                 st.success("✅ Full data restored!")
 
-                # RESET uploader state
-                st.session_state["file_uploader"] = None   
+                st.session_state["file_uploader"] = None
                 st.rerun()
 
             except Exception as e:
@@ -287,22 +358,19 @@ st.divider()
 df = pd.read_sql("SELECT * FROM expenses", conn)
 
 if not df.empty:
-    df['date'] = pd.to_datetime(df['date'], format="%Y-%m-%d", errors='coerce')  # FIXED
+    df['date'] = pd.to_datetime(df['date'], format="%Y-%m-%d", errors='coerce')
 
-    # DEBUG invalid dates
     bad_rows = df[df['date'].isna()]
     if not bad_rows.empty:
         st.error("⚠️ Invalid date rows detected")
         st.write(bad_rows)
 
-    monthly_df = df[df['date'].dt.to_period("M").astype(str) == selected_month]
+    monthly_df = df[df['date'].dt.to_period("M").astype(str) == selected_month].copy()
+    monthly_df["amount"] = pd.to_numeric(monthly_df["amount"], errors="coerce").fillna(0)
 
     st.subheader("💳 Payments")
 
     all_modes = ["Cash","Amazon","Ixiago","Jupiter","TataNeu","SBI","Mom","ICICI","Swiggy"]
-
-    monthly_df = monthly_df.copy()  # FIXED
-    monthly_df["amount"] = pd.to_numeric(monthly_df["amount"], errors="coerce").fillna(0)
 
     pivot = (
         monthly_df.groupby("payment_mode")["amount"]
@@ -312,7 +380,6 @@ if not df.empty:
     )
 
     pivot = pivot.astype(int)
-
     st.table(pivot)
 
     st.divider()
@@ -322,8 +389,8 @@ if not df.empty:
     total = monthly_df["amount"].sum()
     remaining = remaining_budget - total
 
-    st.metric("Spent", f"₹ {total}")
-    st.metric("Left", f"₹ {remaining}")
+    st.metric("Spent", f"₹ {total:,.0f}")
+    st.metric("Left", f"₹ {remaining:,.0f}")
 
     if not monthly_df.empty:
         st.dataframe(monthly_df.sort_values(by="date", ascending=False), use_container_width=True)
@@ -340,8 +407,7 @@ if not df.empty:
     set_df = pd.read_sql("SELECT * FROM settings", conn)
 
     if not set_df.empty:
-
-        exp_df['date'] = pd.to_datetime(exp_df['date'], format="%Y-%m-%d", errors='coerce')  # FIXED
+        exp_df['date'] = pd.to_datetime(exp_df['date'], format="%Y-%m-%d", errors='coerce')
         exp_df['month'] = exp_df['date'].dt.to_period("M").astype(str)
 
         expense_summary = exp_df.groupby("month")["amount"].sum().reset_index()
@@ -357,7 +423,6 @@ if not df.empty:
         )
 
         merged["month_name"] = pd.to_datetime(merged["month"]).dt.strftime("%b %Y")
-
         merged = merged.sort_values("month")
 
         fig = go.Figure()
