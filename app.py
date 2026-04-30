@@ -46,7 +46,17 @@ def get_sheet():
 # -------------------------------
 
 def get_ws(name):
-    return sheet.worksheet(name)
+    try:
+        return sheet.worksheet(name)
+    except gspread.exceptions.WorksheetNotFound:
+        headers = {
+            "expenses": ["id","amount","category","payment_mode","date","note"],
+            "settings": ["month","income","investments","sent_home","emi"],
+            "app_meta": ["key","value"]
+        }
+        ws = sheet.add_worksheet(title=name, rows=1000, cols=20)
+        ws.append_row(headers[name])
+        return ws
 
 # ---- EXPENSES ----
 
@@ -64,7 +74,7 @@ def add_expense(amount, category, payment_mode, exp_date, note):
     ws.append_row([new_id, amount, category, payment_mode, exp_date, note])
 
 def delete_expenses_for_month(month_str):
-    ws = get_ws("expenses")
+    ws = ("expenses")
     all_vals = ws.get_all_values()
     if len(all_vals) <= 1:
         return
