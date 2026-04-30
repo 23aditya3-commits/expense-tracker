@@ -24,7 +24,6 @@ SCOPES = [
 ]
 
 @st.cache_resource
-@st.cache_resource
 def get_sheet():
     creds_dict = {
         "type": st.secrets["gcp"]["type"],
@@ -61,19 +60,15 @@ def get_ws(name):
 
 # -------------------------------
 # 💾 SESSION STATE CACHE
-# Fetch from Sheets only when needed, store in session_state
-# This prevents hitting the 60 reads/min quota
 # -------------------------------
 
 def refresh_cache():
-    """Force re-fetch all data from Google Sheets into session_state."""
     ws_exp = get_ws("expenses")
     data = ws_exp.get_all_records()
     st.session_state["cache_expenses"] = pd.DataFrame(
         data if data else [],
         columns=["id", "amount", "category", "payment_mode", "date", "note"]
     )
-
     ws_set = get_ws("settings")
     data = ws_set.get_all_records()
     st.session_state["cache_settings"] = pd.DataFrame(
@@ -101,12 +96,28 @@ def add_expense(amount, category, payment_mode, exp_date, note):
     df = get_cached_expenses()
     new_id = int(df["id"].max()) + 1 if not df.empty and df["id"].notna().any() else 1
     ws.append_row([new_id, amount, category, payment_mode, exp_date, note])
-    # Update cache locally without re-fetching
     new_row = pd.DataFrame([[new_id, amount, category, payment_mode, exp_date, note]],
                            columns=["id", "amount", "category", "payment_mode", "date", "note"])
     st.session_state["cache_expenses"] = pd.concat(
         [st.session_state["cache_expenses"], new_row], ignore_index=True
     )
+
+def delete_expense_by_id(expense_id):
+    """Delete a single expense row by its id."""
+    ws = get_ws("expenses")
+    all_vals = ws.get_all_values()
+    if len(all_vals) <= 1:
+        return
+    headers = all_vals[0]
+    id_col = headers.index("id")
+    for i, row in enumerate(all_vals[1:], start=2):
+        if len(row) > id_col and str(row[id_col]) == str(expense_id):
+            ws.delete_rows(i)
+            break
+    # Update cache
+    df = get_cached_expenses().copy()
+    df = df[df["id"].astype(str) != str(expense_id)]
+    st.session_state["cache_expenses"] = df
 
 def delete_expenses_for_month(month_str):
     ws = get_ws("expenses")
@@ -160,15 +171,13 @@ def upsert_settings(month_str, income, investments, sent_home, emi):
                 break
         if not updated:
             ws.append_row([month_str, income, investments, sent_home, emi])
-
-    # Update cache locally
     df = get_cached_settings().copy()
     df["month"] = df["month"].astype(str)
     if month_str in df["month"].values:
-        df.loc[df["month"] == month_str, ["income","investments","sent_home","emi"]] = [income, investments, sent_home, emi]
+        df.loc[df["month"] == month_str, ["income", "investments", "sent_home", "emi"]] = [income, investments, sent_home, emi]
     else:
         new_row = pd.DataFrame([[month_str, income, investments, sent_home, emi]],
-                               columns=["month","income","investments","sent_home","emi"])
+                               columns=["month", "income", "investments", "sent_home", "emi"])
         df = pd.concat([df, new_row], ignore_index=True)
     st.session_state["cache_settings"] = df
 
@@ -192,7 +201,6 @@ def delete_all_settings():
     refresh_cache()
 
 # ---- APP META ----
-# Meta is tiny (1-2 rows), read directly — no caching needed
 
 def get_meta(key):
     ws = get_ws("app_meta")
@@ -218,17 +226,16 @@ def set_meta(key, value):
 
 # -------------------------------
 # 🗓️ NEW MONTH AUTO-RESET
-# Runs only once per session via session_state flag
+# Only income/investments/sent_home/emi carry forward.
+# Expenses always start fresh each month.
 # -------------------------------
 today = datetime.now()
 current_month_str = today.strftime("%Y-%m")
 
 if "month_check_done" not in st.session_state:
     last_seen = get_meta("last_seen_month")
-
     if last_seen is None:
         set_meta("last_seen_month", current_month_str)
-
     elif last_seen != current_month_str:
         existing_new = get_settings_for_month(current_month_str)
         if not existing_new:
@@ -241,7 +248,6 @@ if "month_check_done" not in st.session_state:
                 )
         set_meta("last_seen_month", current_month_str)
         st.toast(f"🎉 New month! Budget carried forward from {last_seen}.", icon="📅")
-
     st.session_state["month_check_done"] = True
 
 # -------------------------------
@@ -264,20 +270,17 @@ months_list = [
     "January", "February", "March", "April", "May", "June",
     "July", "August", "September", "October", "November", "December"
 ]
-
 years_list = list(range(2024, 2037))
 
 with col_m:
     selected_month_name = st.selectbox(
-        "Month",
-        months_list,
+        "Month", months_list,
         index=st.session_state.selected_month - 1
     )
 
 with col_y:
     selected_year = st.selectbox(
-        "Year",
-        years_list,
+        "Year", years_list,
         index=years_list.index(st.session_state.selected_year)
     )
 
@@ -286,7 +289,6 @@ st.session_state.selected_year = selected_year
 
 month_number = st.session_state.selected_month
 selected_year = st.session_state.selected_year
-
 selected_month = f"{selected_year}-{month_number:02d}"
 selected_display = f"{selected_month_name} {selected_year}"
 
@@ -304,11 +306,9 @@ income_db, invest_db, home_db, emi_db = (settings[1:5] if settings else (0, 0, 0
 st.subheader(f"💰 {selected_display} Budget")
 
 col1, col2 = st.columns(2)
-
 with col1:
     income = st.number_input("Income", value=income_db if income_db != 0 else None, placeholder="₹")
     investments = st.number_input("Invest", value=invest_db if invest_db != 0 else None, placeholder="₹")
-
 with col2:
     sent_home = st.number_input("Home", value=home_db if home_db != 0 else None, placeholder="₹")
     emi = st.number_input("EMI", value=emi_db if emi_db != 0 else None, placeholder="₹")
@@ -318,7 +318,6 @@ investments = investments or 0
 sent_home = sent_home or 0
 emi = emi or 0
 
-# Accurate "left" from cached expenses
 _all_exp = load_expenses()
 if not _all_exp.empty and "date" in _all_exp.columns:
     _monthly_now = _all_exp[_all_exp["date"].astype(str).str.startswith(selected_month)]
@@ -332,7 +331,6 @@ remaining_after_expenses = remaining_budget - total_spent_now
 st.success(f"💸 Spendable: ₹{remaining_budget:,.0f}  |  After expenses: ₹{remaining_after_expenses:,.0f}")
 
 col_save, col_reset = st.columns(2)
-
 with col_save:
     if st.button("💾 Save"):
         upsert_settings(selected_month, income, investments, sent_home, emi)
@@ -344,16 +342,13 @@ with col_reset:
 
 if st.session_state.get("confirm"):
     st.warning("Reset this month?")
-
     col_yes, col_no = st.columns(2)
-
     with col_yes:
         if st.button("Yes"):
             delete_settings_for_month(selected_month)
             delete_expenses_for_month(selected_month)
             st.session_state.confirm = False
             st.rerun()
-
     with col_no:
         if st.button("No"):
             st.session_state.confirm = False
@@ -367,13 +362,11 @@ st.divider()
 st.subheader("➕ Add Expense")
 
 col1, col2 = st.columns(2)
-
 with col1:
     exp_date = st.date_input("Date", date.today())
     category = st.selectbox("Category", [
         "Grocery", "Pets", "Dress", "Fun", "Edu", "Misc", "Food", "Rent", "Other"
     ])
-
 with col2:
     payment_mode = st.selectbox("Mode", [
         "Cash", "Amazon", "Ixiago", "Jupiter", "TataNeu", "SBI", "Mom", "ICICI", "Swiggy"
@@ -398,13 +391,9 @@ st.subheader("📥 Backup")
 
 if st.button("📦 Generate Backup"):
     try:
-        exp_df = load_expenses()
+        exp_df = load_expenses().copy()
         set_df = load_settings()
-
-        # Convert all columns to string-safe types before JSON serialization
-        exp_df = exp_df.copy()
         exp_df["date"] = exp_df["date"].astype(str)
-
         backup_data = {
             "expenses": exp_df.to_dict(orient="records"),
             "settings": set_df.to_dict(orient="records")
@@ -426,43 +415,38 @@ st.subheader("♻️ Restore Backup")
 if "uploader_key" not in st.session_state:
     st.session_state.uploader_key = 0
 
-uploaded_file = st.file_uploader("Upload backup.json", type=["json"], key=f"file_uploader_{st.session_state.uploader_key}")
+uploaded_file = st.file_uploader(
+    "Upload backup.json", type=["json"],
+    key=f"file_uploader_{st.session_state.uploader_key}"
+)
 
 if uploaded_file is not None:
     backup_data = json.load(uploaded_file)
-
     st.warning("⚠️ This will overwrite ALL data!")
-
     col1, col2 = st.columns(2)
-
     with col1:
         if st.button("✅ Confirm Restore"):
             try:
                 delete_all_expenses()
                 delete_all_settings()
-
                 ws_exp = get_ws("expenses")
                 for row in backup_data.get("expenses", []):
                     ws_exp.append_row([
                         row["id"], row["amount"], row["category"],
                         row["payment_mode"], row["date"], row.get("note", "")
                     ])
-
                 ws_set = get_ws("settings")
                 for row in backup_data.get("settings", []):
                     ws_set.append_row([
                         row["month"], row["income"], row["investments"],
                         row["sent_home"], row["emi"]
                     ])
-
                 refresh_cache()
                 st.success("✅ Full data restored!")
-                st.session_state.uploader_key += 1  # forces file uploader to reset
+                st.session_state.uploader_key += 1
                 st.rerun()
-
             except Exception as e:
                 st.error(f"Restore failed: {e}")
-
     with col2:
         if st.button("❌ Cancel Restore"):
             st.info("Restore cancelled")
@@ -475,47 +459,52 @@ st.divider()
 df = load_expenses()
 
 if not df.empty:
+    df = df.copy()
     df['date'] = pd.to_datetime(df['date'], format="%Y-%m-%d", errors='coerce')
     df["amount"] = pd.to_numeric(df["amount"], errors="coerce").fillna(0)
 
-    bad_rows = df[df['date'].isna()]
-    if not bad_rows.empty:
-        st.error("⚠️ Invalid date rows detected")
-        st.write(bad_rows)
-
+    # FIX 1: filter monthly_df based on selected_month (was always showing all months)
     monthly_df = df[df['date'].dt.to_period("M").astype(str) == selected_month].copy()
 
     st.subheader("💳 Payments")
-
     all_modes = ["Cash", "Amazon", "Ixiago", "Jupiter", "TataNeu", "SBI", "Mom", "ICICI", "Swiggy"]
-
     pivot = (
         monthly_df.groupby("payment_mode")["amount"]
         .sum()
         .reindex(all_modes, fill_value=0)
         .to_frame().T
     )
-
     pivot = pivot.astype(int)
     st.table(pivot)
 
     st.divider()
 
     st.subheader("📊 Summary")
-
     total = monthly_df["amount"].sum()
     remaining = remaining_budget - total
-
     st.metric("Spent", f"₹ {total:,.0f}")
     st.metric("Left", f"₹ {remaining:,.0f}")
 
+    # FIX 2: Delete individual expense
     if not monthly_df.empty:
-        st.dataframe(monthly_df.sort_values(by="date", ascending=False), use_container_width=True)
+        st.subheader("🧾 Expenses")
+        for _, row in monthly_df.sort_values(by="date", ascending=False).iterrows():
+            col_info, col_del = st.columns([5, 1])
+            with col_info:
+                st.write(
+                    f"**₹{float(row['amount']):,.0f}** · {row['category']} · "
+                    f"{row['payment_mode']} · {str(row['date'])[:10]}"
+                    + (f" · _{row['note']}_" if row['note'] else "")
+                )
+            with col_del:
+                if st.button("🗑", key=f"del_{row['id']}"):
+                    delete_expense_by_id(row['id'])
+                    st.rerun()
     else:
-        st.info("No data")
+        st.info("No expenses this month")
 
     # -------------------------------
-    # 📊 MONTHLY BAR CHART
+    # FIX 3: Monthly bar chart — now reactive to selected month data
     # -------------------------------
     st.divider()
     st.subheader("📊 Monthly Overview (Income vs Total Spend)")
@@ -523,6 +512,7 @@ if not df.empty:
     set_df = load_settings()
 
     if not set_df.empty:
+        # Use full df (all months) for the chart
         df['month'] = df['date'].dt.to_period("M").astype(str)
         expense_summary = df.groupby("month")["amount"].sum().reset_index()
 
@@ -531,31 +521,28 @@ if not df.empty:
 
         merged = pd.merge(set_df, expense_summary, on="month", how="left")
         merged["amount"] = merged["amount"].fillna(0)
-
         merged["total_spend"] = (
-            merged["amount"] +
-            merged["investments"] +
-            merged["emi"] +
-            merged["sent_home"]
+            merged["amount"] + merged["investments"] +
+            merged["emi"] + merged["sent_home"]
         )
-
         merged["month_name"] = pd.to_datetime(merged["month"]).dt.strftime("%b %Y")
         merged = merged.sort_values("month")
 
+        # Highlight selected month in the chart
+        colors_income = [
+            "#1f77b4" if m != selected_month else "#ff7f0e"
+            for m in merged["month"]
+        ]
+        colors_spend = [
+            "#2ca02c" if m != selected_month else "#d62728"
+            for m in merged["month"]
+        ]
+
         fig = go.Figure()
-
-        fig.add_bar(
-            x=merged["month_name"],
-            y=merged["income"],
-            name="Income 💰"
-        )
-
-        fig.add_bar(
-            x=merged["month_name"],
-            y=merged["total_spend"],
-            name="Total Spend 💸"
-        )
-
+        fig.add_bar(x=merged["month_name"], y=merged["income"],
+                    name="Income 💰", marker_color=colors_income)
+        fig.add_bar(x=merged["month_name"], y=merged["total_spend"],
+                    name="Total Spend 💸", marker_color=colors_spend)
         fig.update_layout(
             barmode='group',
             xaxis_title="Month",
@@ -564,9 +551,7 @@ if not df.empty:
             height=350,
             xaxis=dict(tickangle=-45)
         )
-
         st.plotly_chart(fig, use_container_width=True)
-
     else:
         st.info("No monthly data available")
 
