@@ -15,7 +15,6 @@ st.set_page_config(
     layout="centered"
 )
 
-
 # -------------------------------
 # 🔑 GOOGLE SHEETS CONNECTION
 # -------------------------------
@@ -24,24 +23,13 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive"
 ]
 
-
 @st.cache_resource
 def get_sheet():
-    creds_dict = {
-        "type": st.secrets["gcp"]["type"],
-        "project_id": st.secrets["gcp"]["project_id"],
-        "private_key_id": st.secrets["gcp"]["private_key_id"],
-        "private_key": st.secrets["gcp"]["private_key"],
-        "client_email": st.secrets["gcp"]["client_email"],
-        "client_id": st.secrets["gcp"]["client_id"],
-        "auth_uri": st.secrets["gcp"]["auth_uri"],
-        "token_uri": st.secrets["gcp"]["token_uri"],
-    }
+    creds_dict = json.loads(st.secrets["gcp"]["json"])
     creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
     client = gspread.authorize(creds)
     return client.open(st.secrets["sheets"]["sheet_name"])
 
-# FIX: assign sheet at module level so all functions can use it
 sheet = get_sheet()
 
 # -------------------------------
@@ -61,23 +49,56 @@ def get_ws(name):
         return ws
     return sheet.worksheet(name)
 
+# -------------------------------
+# 💾 SESSION STATE CACHE
+# Fetch from Sheets only when needed, store in session_state
+# This prevents hitting the 60 reads/min quota
+# -------------------------------
+
+def refresh_cache():
+    """Force re-fetch all data from Google Sheets into session_state."""
+    ws_exp = get_ws("expenses")
+    data = ws_exp.get_all_records()
+    st.session_state["cache_expenses"] = pd.DataFrame(
+        data if data else [],
+        columns=["id", "amount", "category", "payment_mode", "date", "note"]
+    )
+
+    ws_set = get_ws("settings")
+    data = ws_set.get_all_records()
+    st.session_state["cache_settings"] = pd.DataFrame(
+        data if data else [],
+        columns=["month", "income", "investments", "sent_home", "emi"]
+    )
+
+def get_cached_expenses():
+    if "cache_expenses" not in st.session_state:
+        refresh_cache()
+    return st.session_state["cache_expenses"]
+
+def get_cached_settings():
+    if "cache_settings" not in st.session_state:
+        refresh_cache()
+    return st.session_state["cache_settings"]
+
 # ---- EXPENSES ----
 
 def load_expenses():
-    ws = get_ws("expenses")
-    data = ws.get_all_records()
-    if not data:
-        return pd.DataFrame(columns=["id", "amount", "category", "payment_mode", "date", "note"])
-    return pd.DataFrame(data)
+    return get_cached_expenses()
 
 def add_expense(amount, category, payment_mode, exp_date, note):
     ws = get_ws("expenses")
-    existing = ws.get_all_records()
-    new_id = max([r["id"] for r in existing], default=0) + 1 if existing else 1
+    df = get_cached_expenses()
+    new_id = int(df["id"].max()) + 1 if not df.empty and df["id"].notna().any() else 1
     ws.append_row([new_id, amount, category, payment_mode, exp_date, note])
+    # Update cache locally without re-fetching
+    new_row = pd.DataFrame([[new_id, amount, category, payment_mode, exp_date, note]],
+                           columns=["id", "amount", "category", "payment_mode", "date", "note"])
+    st.session_state["cache_expenses"] = pd.concat(
+        [st.session_state["cache_expenses"], new_row], ignore_index=True
+    )
 
 def delete_expenses_for_month(month_str):
-    # FIX: was ws = ("expenses") — missing get_ws()
     ws = get_ws("expenses")
     all_vals = ws.get_all_values()
     if len(all_vals) <= 1:
@@ -90,24 +111,24 @@ def delete_expenses_for_month(month_str):
             rows_to_delete.append(i)
     for row_idx in reversed(rows_to_delete):
         ws.delete_rows(row_idx)
+    refresh_cache()
 
 def delete_all_expenses():
     ws = get_ws("expenses")
     ws.clear()
     ws.append_row(["id", "amount", "category", "payment_mode", "date", "note"])
+    refresh_cache()
 
 # ---- SETTINGS ----
 
 def load_settings():
-    ws = get_ws("settings")
-    data = ws.get_all_records()
-    if not data:
-        return pd.DataFrame(columns=["month", "income", "investments", "sent_home", "emi"])
-    return pd.DataFrame(data)
+    return get_cached_settings()
 
 def get_settings_for_month(month_str):
-    df = load_settings()
-    row = df[df["month"] == month_str]
+    df = get_cached_settings()
+    if df.empty:
+        return None
+    row = df[df["month"].astype(str) == month_str]
     if row.empty:
         return None
     r = row.iloc[0]
@@ -118,14 +139,28 @@ def upsert_settings(month_str, income, investments, sent_home, emi):
     all_vals = ws.get_all_values()
     if len(all_vals) <= 1:
         ws.append_row([month_str, income, investments, sent_home, emi])
-        return
-    headers = all_vals[0]
-    month_col = headers.index("month")
-    for i, row in enumerate(all_vals[1:], start=2):
-        if len(row) > month_col and row[month_col] == month_str:
-            ws.update(f"A{i}:E{i}", [[month_str, income, investments, sent_home, emi]])
-            return
-    ws.append_row([month_str, income, investments, sent_home, emi])
+    else:
+        headers = all_vals[0]
+        month_col = headers.index("month")
+        updated = False
+        for i, row in enumerate(all_vals[1:], start=2):
+            if len(row) > month_col and row[month_col] == month_str:
+                ws.update(f"A{i}:E{i}", [[month_str, income, investments, sent_home, emi]])
+                updated = True
+                break
+        if not updated:
+            ws.append_row([month_str, income, investments, sent_home, emi])
+
+    # Update cache locally
+    df = get_cached_settings().copy()
+    df["month"] = df["month"].astype(str)
+    if month_str in df["month"].values:
+        df.loc[df["month"] == month_str, ["income","investments","sent_home","emi"]] = [income, investments, sent_home, emi]
+    else:
+        new_row = pd.DataFrame([[month_str, income, investments, sent_home, emi]],
+                               columns=["month","income","investments","sent_home","emi"])
+        df = pd.concat([df, new_row], ignore_index=True)
+    st.session_state["cache_settings"] = df
 
 def delete_settings_for_month(month_str):
     ws = get_ws("settings")
@@ -137,14 +172,17 @@ def delete_settings_for_month(month_str):
     for i, row in enumerate(all_vals[1:], start=2):
         if len(row) > month_col and row[month_col] == month_str:
             ws.delete_rows(i)
-            return
+            break
+    refresh_cache()
 
 def delete_all_settings():
     ws = get_ws("settings")
     ws.clear()
     ws.append_row(["month", "income", "investments", "sent_home", "emi"])
+    refresh_cache()
 
 # ---- APP META ----
+# Meta is tiny (1-2 rows), read directly — no caching needed
 
 def get_meta(key):
     ws = get_ws("app_meta")
@@ -270,7 +308,7 @@ investments = investments or 0
 sent_home = sent_home or 0
 emi = emi or 0
 
-# Accurate "left" — subtract actual expenses
+# Accurate "left" from cached expenses
 _all_exp = load_expenses()
 if not _all_exp.empty and "date" in _all_exp.columns:
     _monthly_now = _all_exp[_all_exp["date"].astype(str).str.startswith(selected_month)]
@@ -399,6 +437,7 @@ if uploaded_file is not None:
                         row["sent_home"], row["emi"]
                     ])
 
+                refresh_cache()
                 st.success("✅ Full data restored!")
                 st.session_state["file_uploader"] = None
                 st.rerun()
