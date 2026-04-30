@@ -1,10 +1,11 @@
 import streamlit as st
-import gspread
 import pandas as pd
 from datetime import date, datetime
 from google.oauth2.service_account import Credentials
 import json
 import plotly.graph_objects as go
+import gspread
+from gspread.exceptions import WorksheetNotFound
 
 # -------------------------------
 # PAGE CONFIG (MOBILE FRIENDLY)
@@ -48,7 +49,7 @@ def get_sheet():
 def get_ws(name):
     try:
         return sheet.worksheet(name)
-    except gspread.exceptions.WorksheetNotFound:
+    except WorksheetNotFound:
         headers = {
             "expenses": ["id","amount","category","payment_mode","date","note"],
             "settings": ["month","income","investments","sent_home","emi"],
