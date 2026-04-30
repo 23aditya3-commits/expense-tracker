@@ -47,17 +47,17 @@ def get_sheet():
 # -------------------------------
 
 def get_ws(name):
-    try:
-        return sheet.worksheet(name)
-    except WorksheetNotFound:
-        headers = {
-            "expenses": ["id","amount","category","payment_mode","date","note"],
-            "settings": ["month","income","investments","sent_home","emi"],
-            "app_meta": ["key","value"]
-        }
+    headers_map = {
+        "expenses": ["id","amount","category","payment_mode","date","note"],
+        "settings": ["month","income","investments","sent_home","emi"],
+        "app_meta": ["key","value"]
+    }
+    ws_list = [w.title for w in sheet.worksheets()]
+    if name not in ws_list:
         ws = sheet.add_worksheet(title=name, rows=1000, cols=20)
-        ws.append_row(headers[name])
+        ws.append_row(headers_map[name])
         return ws
+    return sheet.worksheet(name)
 
 # ---- EXPENSES ----
 
