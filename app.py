@@ -69,8 +69,14 @@ auto_backup()
 st.title("💰 Expense Tracker")
 
 # -------------------------------
-# 📅 MONTH + YEAR SELECTOR (FIXED)
+# 📅 MONTH + YEAR SELECTOR (FIXED + SESSION LOCK)
 # -------------------------------
+if "selected_month" not in st.session_state:
+    st.session_state.selected_month = datetime.now().month
+
+if "selected_year" not in st.session_state:
+    st.session_state.selected_year = datetime.now().year
+
 col_m, col_y = st.columns(2)
 
 months_list = [
@@ -84,17 +90,23 @@ with col_m:
     selected_month_name = st.selectbox(
         "Month",
         months_list,
-        index=datetime.now().month - 1
+        index=st.session_state.selected_month - 1
     )
 
 with col_y:
     selected_year = st.selectbox(
         "Year",
         years_list,
-        index=years_list.index(datetime.now().year)
+        index=years_list.index(st.session_state.selected_year)
     )
 
-month_number = months_list.index(selected_month_name) + 1
+# store back
+st.session_state.selected_month = months_list.index(selected_month_name) + 1
+st.session_state.selected_year = selected_year
+
+month_number = st.session_state.selected_month
+selected_year = st.session_state.selected_year
+
 selected_month = f"{selected_year}-{month_number:02d}"
 selected_display = f"{selected_month_name} {selected_year}"
 
@@ -196,7 +208,7 @@ if st.button("Add"):
     if amount and amount > 0:
         c.execute(
             "INSERT INTO expenses (amount, category, payment_mode, date, note) VALUES (?, ?, ?, ?, ?)",
-            (amount, category, payment_mode, str(exp_date), note)
+            (amount, category, payment_mode, exp_date.strftime("%Y-%m-%d"), note)  # FIXED
         )
         conn.commit()
         st.rerun()
@@ -272,7 +284,13 @@ st.divider()
 df = pd.read_sql("SELECT * FROM expenses", conn)
 
 if not df.empty:
-    df['date'] = pd.to_datetime(df['date'], errors='coerce')
+    df['date'] = pd.to_datetime(df['date'], format="%Y-%m-%d", errors='coerce')  # FIXED
+
+    # DEBUG invalid dates
+    bad_rows = df[df['date'].isna()]
+    if not bad_rows.empty:
+        st.error("⚠️ Invalid date rows detected")
+        st.write(bad_rows)
 
     monthly_df = df[df['date'].dt.to_period("M").astype(str) == selected_month]
 
@@ -280,6 +298,7 @@ if not df.empty:
 
     all_modes = ["Cash","Amazon","Ixiago","Jupiter","TataNeu","SBI","Mom","ICICI","Swiggy"]
 
+    monthly_df = monthly_df.copy()  # FIXED
     monthly_df["amount"] = pd.to_numeric(monthly_df["amount"], errors="coerce").fillna(0)
 
     pivot = (
@@ -311,17 +330,6 @@ if not df.empty:
     # -------------------------------
     # 📊 MONTHLY BAR CHART
     # -------------------------------
-    # -------------------------------
-# 📊 IMPROVED MONTHLY BAR CHART
-# -------------------------------
-    # -------------------------------
-# 📊 FIXED MONTHLY BAR CHART
-# -------------------------------
-    # -------------------------------
-# 📊 CLEAN MONTHLY BAR CHART (PLOTLY)
-# -------------------------------
-
-
     st.divider()
     st.subheader("📊 Monthly Overview (Income vs Total Spend)")
 
@@ -330,17 +338,14 @@ if not df.empty:
 
     if not set_df.empty:
 
-        # Prepare expense data
-        exp_df['date'] = pd.to_datetime(exp_df['date'], errors='coerce')
+        exp_df['date'] = pd.to_datetime(exp_df['date'], format="%Y-%m-%d", errors='coerce')  # FIXED
         exp_df['month'] = exp_df['date'].dt.to_period("M").astype(str)
 
         expense_summary = exp_df.groupby("month")["amount"].sum().reset_index()
 
-        # Merge
         merged = pd.merge(set_df, expense_summary, on="month", how="left")
         merged["amount"] = merged["amount"].fillna(0)
 
-        # Total Spend
         merged["total_spend"] = (
             merged["amount"] +
             merged["investments"] +
@@ -348,15 +353,10 @@ if not df.empty:
             merged["sent_home"]
         )
 
-        # Format month
         merged["month_name"] = pd.to_datetime(merged["month"]).dt.strftime("%b %Y")
 
-        # Sort
         merged = merged.sort_values("month")
 
-        # -------------------------------
-        # 👉 REAL SIDE-BY-SIDE BARS
-        # -------------------------------
         fig = go.Figure()
 
         fig.add_bar(
@@ -376,7 +376,7 @@ if not df.empty:
             xaxis_title="Month",
             yaxis_title="Amount (₹)",
             legend_title="",
-            height=350,  # smaller = mobile friendly
+            height=350,
             xaxis=dict(tickangle=-45)
         )
 
