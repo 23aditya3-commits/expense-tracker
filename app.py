@@ -1,8 +1,8 @@
 import streamlit as st
-import sqlite3
+import gspread
 import pandas as pd
 from datetime import date, datetime
-from pathlib import Path
+from google.oauth2.service_account import Credentials
 import json
 import plotly.graph_objects as go
 
@@ -16,114 +16,164 @@ st.set_page_config(
 )
 
 # -------------------------------
-# 🔑 PERSISTENT PATHS
-# Fix: use absolute home-dir paths so DB survives Streamlit restarts
+# 🔑 GOOGLE SHEETS CONNECTION
 # -------------------------------
-DB_PATH = str(Path.home() / "expenses.db")
-BACKUP_PATH = str(Path.home() / "expense_backup.json")
+SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive"
+]
 
-conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-c = conn.cursor()
+@st.cache_resource
+def get_sheet():
+    creds_dict = json.loads(st.secrets["gcp"]["json"])
+    creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
+    client = gspread.authorize(creds)
+    sheet = client.open(st.secrets["sheets"]["sheet_name"])
+    return sheet
 
-# -------------------------------
-# DB SETUP
-# -------------------------------
-c.execute("""
-CREATE TABLE IF NOT EXISTS expenses (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    amount REAL,
-    category TEXT,
-    payment_mode TEXT,
-    date TEXT,
-    note TEXT
-)
-""")
-
-c.execute("""
-CREATE TABLE IF NOT EXISTS settings (
-    month TEXT PRIMARY KEY,
-    income REAL,
-    investments REAL,
-    sent_home REAL,
-    emi REAL
-)
-""")
-
-# Tracks the last month the app was opened — used for new-month rollover detection
-c.execute("""
-CREATE TABLE IF NOT EXISTS app_meta (
-    key TEXT PRIMARY KEY,
-    value TEXT
-)
-""")
-
-conn.commit()
+sheet = get_sheet()
 
 # -------------------------------
-# 🔁 AUTO BACKUP (FULL DATA) — to persistent path
+# 📋 SHEET HELPERS
+# Each tab = one "table": expenses, settings, app_meta
 # -------------------------------
-def auto_backup():
-    try:
-        expenses_df = pd.read_sql("SELECT * FROM expenses", conn)
-        settings_df = pd.read_sql("SELECT * FROM settings", conn)
 
-        backup_data = {
-            "expenses": expenses_df.to_dict(orient="records"),
-            "settings": settings_df.to_dict(orient="records")
-        }
+def get_ws(name):
+    return sheet.worksheet(name)
 
-        with open(BACKUP_PATH, "w") as f:
-            json.dump(backup_data, f)
-    except Exception:
-        pass
+# ---- EXPENSES ----
 
-auto_backup()
+def load_expenses():
+    ws = get_ws("expenses")
+    data = ws.get_all_records()
+    if not data:
+        return pd.DataFrame(columns=["id","amount","category","payment_mode","date","note"])
+    return pd.DataFrame(data)
+
+def add_expense(amount, category, payment_mode, exp_date, note):
+    ws = get_ws("expenses")
+    existing = ws.get_all_records()
+    new_id = max([r["id"] for r in existing], default=0) + 1 if existing else 1
+    ws.append_row([new_id, amount, category, payment_mode, exp_date, note])
+
+def delete_expenses_for_month(month_str):
+    ws = get_ws("expenses")
+    all_vals = ws.get_all_values()
+    if len(all_vals) <= 1:
+        return
+    headers = all_vals[0]
+    date_col = headers.index("date")
+    rows_to_delete = []
+    for i, row in enumerate(all_vals[1:], start=2):
+        if len(row) > date_col and row[date_col].startswith(month_str):
+            rows_to_delete.append(i)
+    for row_idx in reversed(rows_to_delete):
+        ws.delete_rows(row_idx)
+
+def delete_all_expenses():
+    ws = get_ws("expenses")
+    ws.clear()
+    ws.append_row(["id","amount","category","payment_mode","date","note"])
+
+# ---- SETTINGS ----
+
+def load_settings():
+    ws = get_ws("settings")
+    data = ws.get_all_records()
+    if not data:
+        return pd.DataFrame(columns=["month","income","investments","sent_home","emi"])
+    return pd.DataFrame(data)
+
+def get_settings_for_month(month_str):
+    df = load_settings()
+    row = df[df["month"] == month_str]
+    if row.empty:
+        return None
+    r = row.iloc[0]
+    return (r["month"], float(r["income"]), float(r["investments"]), float(r["sent_home"]), float(r["emi"]))
+
+def upsert_settings(month_str, income, investments, sent_home, emi):
+    ws = get_ws("settings")
+    all_vals = ws.get_all_values()
+    if len(all_vals) <= 1:
+        ws.append_row([month_str, income, investments, sent_home, emi])
+        return
+    headers = all_vals[0]
+    month_col = headers.index("month")
+    for i, row in enumerate(all_vals[1:], start=2):
+        if len(row) > month_col and row[month_col] == month_str:
+            ws.update(f"A{i}:E{i}", [[month_str, income, investments, sent_home, emi]])
+            return
+    ws.append_row([month_str, income, investments, sent_home, emi])
+
+def delete_settings_for_month(month_str):
+    ws = get_ws("settings")
+    all_vals = ws.get_all_values()
+    if len(all_vals) <= 1:
+        return
+    headers = all_vals[0]
+    month_col = headers.index("month")
+    for i, row in enumerate(all_vals[1:], start=2):
+        if len(row) > month_col and row[month_col] == month_str:
+            ws.delete_rows(i)
+            return
+
+def delete_all_settings():
+    ws = get_ws("settings")
+    ws.clear()
+    ws.append_row(["month","income","investments","sent_home","emi"])
+
+# ---- APP META ----
+
+def get_meta(key):
+    ws = get_ws("app_meta")
+    data = ws.get_all_records()
+    for row in data:
+        if row["key"] == key:
+            return str(row["value"])
+    return None
+
+def set_meta(key, value):
+    ws = get_ws("app_meta")
+    all_vals = ws.get_all_values()
+    if len(all_vals) <= 1:
+        ws.append_row([key, value])
+        return
+    headers = all_vals[0]
+    key_col = headers.index("key")
+    for i, row in enumerate(all_vals[1:], start=2):
+        if len(row) > key_col and row[key_col] == key:
+            ws.update(f"A{i}:B{i}", [[key, value]])
+            return
+    ws.append_row([key, value])
 
 # -------------------------------
 # 🗓️ NEW MONTH AUTO-RESET
-# On first open of a new calendar month:
-#   - Clear all expenses for the new month (shouldn't be any, but defensive)
-#   - Carry forward budget settings from last month into new month
-#   - Update last_seen_month in app_meta
-# Does NOT touch past months' data.
+# Runs only once per session via session_state flag
 # -------------------------------
-def get_meta(key):
-    row = c.execute("SELECT value FROM app_meta WHERE key=?", (key,)).fetchone()
-    return row[0] if row else None
-
-def set_meta(key, value):
-    c.execute("""
-        INSERT INTO app_meta (key, value) VALUES (?, ?)
-        ON CONFLICT(key) DO UPDATE SET value=excluded.value
-    """, (key, value))
-    conn.commit()
-
 today = datetime.now()
-current_month_str = today.strftime("%Y-%m")  # e.g. "2025-07"
-last_seen = get_meta("last_seen_month")
+current_month_str = today.strftime("%Y-%m")
 
-if last_seen is None:
-    # First ever open — just record current month
-    set_meta("last_seen_month", current_month_str)
+if "month_check_done" not in st.session_state:
+    last_seen = get_meta("last_seen_month")
 
-elif last_seen != current_month_str:
-    # New month detected!
-    # 1. Carry forward settings from last month to new month (if new month has no settings yet)
-    existing_new = c.execute("SELECT 1 FROM settings WHERE month=?", (current_month_str,)).fetchone()
-    if not existing_new:
-        last_settings = c.execute("SELECT * FROM settings WHERE month=?", (last_seen,)).fetchone()
-        if last_settings:
-            # Carry forward income/investments/sent_home/emi, reset expenses implicitly (new month = no entries)
-            c.execute("""
-                INSERT INTO settings (month, income, investments, sent_home, emi)
-                VALUES (?, ?, ?, ?, ?)
-            """, (current_month_str, last_settings[1], last_settings[2], last_settings[3], last_settings[4]))
-            conn.commit()
+    if last_seen is None:
+        set_meta("last_seen_month", current_month_str)
 
-    # 2. Update last_seen so this only runs once per month
-    set_meta("last_seen_month", current_month_str)
+    elif last_seen != current_month_str:
+        existing_new = get_settings_for_month(current_month_str)
+        if not existing_new:
+            last_settings = get_settings_for_month(last_seen)
+            if last_settings:
+                upsert_settings(
+                    current_month_str,
+                    last_settings[1], last_settings[2],
+                    last_settings[3], last_settings[4]
+                )
+        set_meta("last_seen_month", current_month_str)
+        st.toast(f"🎉 New month! Budget carried forward from {last_seen}.", icon="📅")
 
-    st.toast(f"🎉 New month! Budget carried forward from {last_seen}. Expenses reset.", icon="📅")
+    st.session_state["month_check_done"] = True
 
 # -------------------------------
 # TITLE
@@ -176,7 +226,7 @@ st.divider()
 # -------------------------------
 # LOAD SETTINGS
 # -------------------------------
-settings = c.execute("SELECT * FROM settings WHERE month=?", (selected_month,)).fetchone()
+settings = get_settings_for_month(selected_month)
 income_db, invest_db, home_db, emi_db = (settings[1:5] if settings else (0, 0, 0, 0))
 
 # -------------------------------
@@ -199,12 +249,13 @@ investments = investments or 0
 sent_home = sent_home or 0
 emi = emi or 0
 
-# Load actual expenses for this month to show accurate "left" budget
-_expenses_now = pd.read_sql(
-    "SELECT amount FROM expenses WHERE strftime('%Y-%m', date)=?",
-    conn, params=(selected_month,)
-)
-total_spent_now = float(_expenses_now["amount"].sum()) if not _expenses_now.empty else 0.0
+# Accurate "left" — subtract actual expenses
+_all_exp = load_expenses()
+if not _all_exp.empty and "date" in _all_exp.columns:
+    _monthly_now = _all_exp[_all_exp["date"].astype(str).str.startswith(selected_month)]
+    total_spent_now = pd.to_numeric(_monthly_now["amount"], errors="coerce").sum()
+else:
+    total_spent_now = 0.0
 
 remaining_budget = income - (investments + sent_home + emi)
 remaining_after_expenses = remaining_budget - total_spent_now
@@ -215,17 +266,7 @@ col_save, col_reset = st.columns(2)
 
 with col_save:
     if st.button("💾 Save"):
-        c.execute("""
-        INSERT INTO settings (month, income, investments, sent_home, emi)
-        VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(month) DO UPDATE SET
-        income=excluded.income,
-        investments=excluded.investments,
-        sent_home=excluded.sent_home,
-        emi=excluded.emi
-        """, (selected_month, income, investments, sent_home, emi))
-        conn.commit()
-        auto_backup()
+        upsert_settings(selected_month, income, investments, sent_home, emi)
         st.success("Saved ✅")
 
 with col_reset:
@@ -239,10 +280,8 @@ if st.session_state.get("confirm"):
 
     with col_yes:
         if st.button("Yes"):
-            c.execute("DELETE FROM settings WHERE month=?", (selected_month,))
-            c.execute("DELETE FROM expenses WHERE strftime('%Y-%m', date)=?", (selected_month,))
-            conn.commit()
-            auto_backup()
+            delete_settings_for_month(selected_month)
+            delete_expenses_for_month(selected_month)
             st.session_state.confirm = False
             st.rerun()
 
@@ -276,12 +315,7 @@ note = st.text_input("Note")
 
 if st.button("Add"):
     if amount and amount > 0:
-        c.execute(
-            "INSERT INTO expenses (amount, category, payment_mode, date, note) VALUES (?, ?, ?, ?, ?)",
-            (amount, category, payment_mode, exp_date.strftime("%Y-%m-%d"), note)
-        )
-        conn.commit()
-        auto_backup()
+        add_expense(amount, category, payment_mode, exp_date.strftime("%Y-%m-%d"), note or "")
         st.rerun()
     else:
         st.warning("Enter amount")
@@ -290,19 +324,26 @@ st.divider()
 
 # -------------------------------
 # 📥 BACKUP DOWNLOAD
+# Google Sheets is persistent, but JSON export still available
 # -------------------------------
 st.subheader("📥 Backup")
 
-try:
-    with open(BACKUP_PATH, "rb") as f:
+if st.button("📦 Generate Backup"):
+    try:
+        exp_df = load_expenses()
+        set_df = load_settings()
+        backup_data = {
+            "expenses": exp_df.to_dict(orient="records"),
+            "settings": set_df.to_dict(orient="records")
+        }
         st.download_button(
             label="⬇️ Download Full Backup",
-            data=f,
+            data=json.dumps(backup_data),
             file_name="expense_backup.json",
             mime="application/json"
         )
-except Exception:
-    st.info("No backup available yet")
+    except Exception as e:
+        st.error(f"Backup failed: {e}")
 
 # -------------------------------
 # ♻️ RESTORE
@@ -321,25 +362,24 @@ if uploaded_file is not None:
     with col1:
         if st.button("✅ Confirm Restore"):
             try:
-                c.execute("DELETE FROM expenses")
-                c.execute("DELETE FROM settings")
+                delete_all_expenses()
+                delete_all_settings()
 
+                ws_exp = get_ws("expenses")
                 for row in backup_data.get("expenses", []):
-                    c.execute(
-                        "INSERT INTO expenses (id, amount, category, payment_mode, date, note) VALUES (?, ?, ?, ?, ?, ?)",
-                        (row["id"], row["amount"], row["category"], row["payment_mode"], row["date"], row["note"])
-                    )
+                    ws_exp.append_row([
+                        row["id"], row["amount"], row["category"],
+                        row["payment_mode"], row["date"], row.get("note", "")
+                    ])
 
+                ws_set = get_ws("settings")
                 for row in backup_data.get("settings", []):
-                    c.execute(
-                        "INSERT INTO settings (month, income, investments, sent_home, emi) VALUES (?, ?, ?, ?, ?)",
-                        (row["month"], row["income"], row["investments"], row["sent_home"], row["emi"])
-                    )
+                    ws_set.append_row([
+                        row["month"], row["income"], row["investments"],
+                        row["sent_home"], row["emi"]
+                    ])
 
-                conn.commit()
-                auto_backup()
                 st.success("✅ Full data restored!")
-
                 st.session_state["file_uploader"] = None
                 st.rerun()
 
@@ -355,10 +395,11 @@ st.divider()
 # -------------------------------
 # 📊 DATA
 # -------------------------------
-df = pd.read_sql("SELECT * FROM expenses", conn)
+df = load_expenses()
 
 if not df.empty:
     df['date'] = pd.to_datetime(df['date'], format="%Y-%m-%d", errors='coerce')
+    df["amount"] = pd.to_numeric(df["amount"], errors="coerce").fillna(0)
 
     bad_rows = df[df['date'].isna()]
     if not bad_rows.empty:
@@ -366,7 +407,6 @@ if not df.empty:
         st.write(bad_rows)
 
     monthly_df = df[df['date'].dt.to_period("M").astype(str) == selected_month].copy()
-    monthly_df["amount"] = pd.to_numeric(monthly_df["amount"], errors="coerce").fillna(0)
 
     st.subheader("💳 Payments")
 
@@ -403,14 +443,14 @@ if not df.empty:
     st.divider()
     st.subheader("📊 Monthly Overview (Income vs Total Spend)")
 
-    exp_df = pd.read_sql("SELECT * FROM expenses", conn)
-    set_df = pd.read_sql("SELECT * FROM settings", conn)
+    set_df = load_settings()
 
     if not set_df.empty:
-        exp_df['date'] = pd.to_datetime(exp_df['date'], format="%Y-%m-%d", errors='coerce')
-        exp_df['month'] = exp_df['date'].dt.to_period("M").astype(str)
+        df['month'] = df['date'].dt.to_period("M").astype(str)
+        expense_summary = df.groupby("month")["amount"].sum().reset_index()
 
-        expense_summary = exp_df.groupby("month")["amount"].sum().reset_index()
+        for col in ["income","investments","emi","sent_home"]:
+            set_df[col] = pd.to_numeric(set_df[col], errors="coerce").fillna(0)
 
         merged = pd.merge(set_df, expense_summary, on="month", how="left")
         merged["amount"] = merged["amount"].fillna(0)
