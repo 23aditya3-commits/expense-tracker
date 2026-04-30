@@ -238,7 +238,7 @@ except:
 # -------------------------------
 st.subheader("♻️ Restore Backup")
 
-uploaded_file = st.file_uploader("Upload backup.json", type=["json"])
+uploaded_file = st.file_uploader( "Upload backup.json", type=["json"], key="file_uploader" )
 
 if uploaded_file is not None:
     backup_data = json.load(uploaded_file)
@@ -267,6 +267,9 @@ if uploaded_file is not None:
 
                 conn.commit()
                 st.success("✅ Full data restored!")
+
+                # RESET uploader state
+                st.session_state["file_uploader"] = None   
                 st.rerun()
 
             except Exception as e:
