@@ -423,7 +423,10 @@ if st.button("📦 Generate Backup"):
 # -------------------------------
 st.subheader("♻️ Restore Backup")
 
-uploaded_file = st.file_uploader("Upload backup.json", type=["json"], key="file_uploader")
+if "uploader_key" not in st.session_state:
+    st.session_state.uploader_key = 0
+
+uploaded_file = st.file_uploader("Upload backup.json", type=["json"], key=f"file_uploader_{st.session_state.uploader_key}")
 
 if uploaded_file is not None:
     backup_data = json.load(uploaded_file)
@@ -454,7 +457,7 @@ if uploaded_file is not None:
 
                 refresh_cache()
                 st.success("✅ Full data restored!")
-                st.session_state["file_uploader"] = None
+                st.session_state.uploader_key += 1  # forces file uploader to reset
                 st.rerun()
 
             except Exception as e:
