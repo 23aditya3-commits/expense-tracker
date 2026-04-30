@@ -29,7 +29,7 @@ SCOPES = [
 @st.cache_resource
 def get_sheet():
     creds_dict = {
-        "type": st.secrets["gcp"]["type"],
+        "type": st.secrets["json"]["type"],
         "project_id": st.secrets["gcp"]["project_id"],
         "private_key_id": st.secrets["gcp"]["private_key_id"],
         "private_key": st.secrets["gcp"]["private_key"],
