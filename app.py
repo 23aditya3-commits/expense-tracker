@@ -48,7 +48,7 @@ sheet = get_sheet()
 def get_ws(name):
     headers_map = {
         "expenses": ["id", "amount", "category", "payment_mode", "date", "note"],
-        "settings": ["month", "income", "investments", "sent_home", "emi"],
+        "settings": ["month", "income", "investments", "sent_home", "emi", "card"],
         "app_meta": ["key", "value"]
     }
     ws_list = [w.title for w in sheet.worksheets()]
@@ -73,7 +73,7 @@ def refresh_cache():
     data = ws_set.get_all_records()
     st.session_state["cache_settings"] = pd.DataFrame(
         data if data else [],
-        columns=["month", "income", "investments", "sent_home", "emi"]
+        columns=["month", "income", "investments", "sent_home", "emi", "card"]
     )
 
 def get_cached_expenses():
@@ -153,31 +153,38 @@ def get_settings_for_month(month_str):
     if row.empty:
         return None
     r = row.iloc[0]
-    return (r["month"], float(r["income"]), float(r["investments"]), float(r["sent_home"]), float(r["emi"]))
+    return (
+        r["month"],
+        float(r["income"]),
+        float(r["investments"]),
+        float(r["sent_home"]),
+        float(r["emi"]),
+        float(r["card"]) if "card" in r and pd.notna(r["card"]) and str(r["card"]) != "" else 0.0,
+    )
 
-def upsert_settings(month_str, income, investments, sent_home, emi):
+def upsert_settings(month_str, income, investments, sent_home, emi, card):
     ws = get_ws("settings")
     all_vals = ws.get_all_values()
     if len(all_vals) <= 1:
-        ws.append_row([month_str, income, investments, sent_home, emi])
+        ws.append_row([month_str, income, investments, sent_home, emi, card])
     else:
         headers = all_vals[0]
         month_col = headers.index("month")
         updated = False
         for i, row in enumerate(all_vals[1:], start=2):
             if len(row) > month_col and row[month_col] == month_str:
-                ws.update(f"A{i}:E{i}", [[month_str, income, investments, sent_home, emi]])
+                ws.update(f"A{i}:F{i}", [[month_str, income, investments, sent_home, emi, card]])
                 updated = True
                 break
         if not updated:
-            ws.append_row([month_str, income, investments, sent_home, emi])
+            ws.append_row([month_str, income, investments, sent_home, emi, card])
     df = get_cached_settings().copy()
     df["month"] = df["month"].astype(str)
     if month_str in df["month"].values:
-        df.loc[df["month"] == month_str, ["income", "investments", "sent_home", "emi"]] = [income, investments, sent_home, emi]
+        df.loc[df["month"] == month_str, ["income", "investments", "sent_home", "emi", "card"]] = [income, investments, sent_home, emi, card]
     else:
-        new_row = pd.DataFrame([[month_str, income, investments, sent_home, emi]],
-                               columns=["month", "income", "investments", "sent_home", "emi"])
+        new_row = pd.DataFrame([[month_str, income, investments, sent_home, emi, card]],
+                               columns=["month", "income", "investments", "sent_home", "emi", "card"])
         df = pd.concat([df, new_row], ignore_index=True)
     st.session_state["cache_settings"] = df
 
@@ -197,7 +204,7 @@ def delete_settings_for_month(month_str):
 def delete_all_settings():
     ws = get_ws("settings")
     ws.clear()
-    ws.append_row(["month", "income", "investments", "sent_home", "emi"])
+    ws.append_row(["month", "income", "investments", "sent_home", "emi", "card"])
     refresh_cache()
 
 # ---- APP META ----
@@ -226,7 +233,7 @@ def set_meta(key, value):
 
 # -------------------------------
 # 🗓️ NEW MONTH AUTO-RESET
-# Only income/investments/sent_home/emi carry forward.
+# Only income/investments/sent_home/emi/card carry forward.
 # Expenses always start fresh each month.
 # -------------------------------
 today = datetime.now()
@@ -244,7 +251,8 @@ if "month_check_done" not in st.session_state:
                 upsert_settings(
                     current_month_str,
                     last_settings[1], last_settings[2],
-                    last_settings[3], last_settings[4]
+                    last_settings[3], last_settings[4],
+                    last_settings[5]
                 )
         set_meta("last_seen_month", current_month_str)
         st.toast(f"🎉 New month! Budget carried forward from {last_seen}.", icon="📅")
@@ -298,25 +306,28 @@ st.divider()
 # LOAD SETTINGS
 # -------------------------------
 settings = get_settings_for_month(selected_month)
-income_db, invest_db, home_db, emi_db = (settings[1:5] if settings else (0, 0, 0, 0))
+income_db, invest_db, home_db, emi_db, card_db = (settings[1:6] if settings else (0, 0, 0, 0, 0))
 
 # -------------------------------
 # 💰 BUDGET
 # -------------------------------
 st.subheader(f"💰 {selected_display} Budget")
 
-col1, col2 = st.columns(2)
+col1, col2, col3 = st.columns(3)
 with col1:
     income = st.number_input("Income", value=income_db if income_db != 0 else None, placeholder="₹")
     investments = st.number_input("Invest", value=invest_db if invest_db != 0 else None, placeholder="₹")
 with col2:
     sent_home = st.number_input("Home", value=home_db if home_db != 0 else None, placeholder="₹")
     emi = st.number_input("EMI", value=emi_db if emi_db != 0 else None, placeholder="₹")
+with col3:
+    card = st.number_input("Money for card", value=card_db if card_db != 0 else None, placeholder="₹")
 
 income = income or 0
 investments = investments or 0
 sent_home = sent_home or 0
 emi = emi or 0
+card = card or 0
 
 _all_exp = load_expenses()
 if not _all_exp.empty and "date" in _all_exp.columns:
@@ -325,7 +336,7 @@ if not _all_exp.empty and "date" in _all_exp.columns:
 else:
     total_spent_now = 0.0
 
-remaining_budget = income - (investments + sent_home + emi)
+remaining_budget = income - (investments + sent_home + emi + card)
 remaining_after_expenses = remaining_budget - total_spent_now
 
 st.success(f"💸 Spendable: ₹{remaining_budget:,.0f}  |  After expenses: ₹{remaining_after_expenses:,.0f}")
@@ -333,7 +344,7 @@ st.success(f"💸 Spendable: ₹{remaining_budget:,.0f}  |  After expenses: ₹{
 col_save, col_reset = st.columns(2)
 with col_save:
     if st.button("💾 Save"):
-        upsert_settings(selected_month, income, investments, sent_home, emi)
+        upsert_settings(selected_month, income, investments, sent_home, emi, card)
         st.success("Saved ✅")
 
 with col_reset:
@@ -365,7 +376,7 @@ col1, col2 = st.columns(2)
 with col1:
     exp_date = st.date_input("Date", date.today())
     category = st.selectbox("Category", [
-        "Grocery", "Pets", "Dress", "Fun", "Edu", "Misc", "Food", "Rent", "Other"
+        "Grocery", "Pets", "Dress", "Fun", "Edu", "Misc", "Food", "Rent", "Petrol", "Other"
     ])
 with col2:
     payment_mode = st.selectbox("Mode", [
@@ -439,7 +450,7 @@ if uploaded_file is not None:
                 for row in backup_data.get("settings", []):
                     ws_set.append_row([
                         row["month"], row["income"], row["investments"],
-                        row["sent_home"], row["emi"]
+                        row["sent_home"], row["emi"], row.get("card", 0)
                     ])
                 refresh_cache()
                 st.success("✅ Full data restored!")
@@ -516,14 +527,17 @@ if not df.empty:
         df['month'] = df['date'].dt.to_period("M").astype(str)
         expense_summary = df.groupby("month")["amount"].sum().reset_index()
 
-        for col in ["income", "investments", "emi", "sent_home"]:
-            set_df[col] = pd.to_numeric(set_df[col], errors="coerce").fillna(0)
+        for col in ["income", "investments", "emi", "sent_home", "card"]:
+            if col in set_df.columns:
+                set_df[col] = pd.to_numeric(set_df[col], errors="coerce").fillna(0)
+            else:
+                set_df[col] = 0
 
         merged = pd.merge(set_df, expense_summary, on="month", how="left")
         merged["amount"] = merged["amount"].fillna(0)
         merged["total_spend"] = (
             merged["amount"] + merged["investments"] +
-            merged["emi"] + merged["sent_home"]
+            merged["emi"] + merged["sent_home"] + merged["card"]
         )
         merged["month_name"] = pd.to_datetime(merged["month"]).dt.strftime("%b %Y")
         merged = merged.sort_values("month")
