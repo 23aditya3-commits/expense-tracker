@@ -56,7 +56,19 @@ def get_ws(name):
         ws = sheet.add_worksheet(title=name, rows=1000, cols=20)
         ws.append_row(headers_map[name])
         return ws
-    return sheet.worksheet(name)
+
+    ws = sheet.worksheet(name)
+
+    # ---- MIGRATION: add any new expected columns to older sheets ----
+    expected = headers_map[name]
+    existing_headers = ws.row_values(1)
+    missing = [h for h in expected if h not in existing_headers]
+    if missing:
+        new_headers = existing_headers + missing
+        end_col_a1 = gspread.utils.rowcol_to_a1(1, len(new_headers))
+        ws.update(f"A1:{end_col_a1}", [new_headers])
+
+    return ws
 
 # -------------------------------
 # 💾 SESSION STATE CACHE
