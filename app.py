@@ -490,7 +490,7 @@ if not df.empty:
     monthly_df = df[df['date'].dt.to_period("M").astype(str) == selected_month].copy()
 
     st.subheader("💳 Payments")
-    all_modes = ["Cash", "Amazon", "Ixiago", "Jupiter", "TataNeu", "SBI", "Mom", "ICICI", "Swiggy"]
+    all_modes = ["Cash", "Amazon", "Ixiago", "Jupiter", "TataNeu", "SBI", "Mom", "ICICI", "Swiggy","Slice"]
     pivot = (
         monthly_df.groupby("payment_mode")["amount"]
         .sum()
