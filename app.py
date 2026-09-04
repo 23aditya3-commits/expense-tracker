@@ -392,7 +392,7 @@ with col1:
     ])
 with col2:
     payment_mode = st.selectbox("Mode", [
-        "Cash", "Amazon", "Ixiago", "Jupiter", "TataNeu", "SBI", "Mom", "ICICI", "Swiggy"
+        "Cash", "Amazon", "Ixiago", "Jupiter", "TataNeu", "SBI", "Mom", "ICICI", "Swiggy","Slice"
     ])
     amount = st.number_input("Amount", value=None, placeholder="₹", min_value=0)
 
