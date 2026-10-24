@@ -508,6 +508,49 @@ if not df.empty:
     st.metric("Spent", f"₹ {total:,.0f}")
     st.metric("Left", f"₹ {remaining:,.0f}")
 
+    # -------------------------------
+    # 🏷️ CATEGORY BREAKDOWN (NEW)
+    # -------------------------------
+    st.divider()
+    st.subheader("🏷️ Spending by Category")
+
+    if not monthly_df.empty:
+        cat_summary = (
+            monthly_df.groupby("category")["amount"]
+            .sum()
+            .sort_values(ascending=False)
+            .reset_index()
+        )
+        cat_summary["amount"] = cat_summary["amount"].astype(int)
+
+        fig_cat = go.Figure(
+            go.Bar(
+                x=cat_summary["amount"],
+                y=cat_summary["category"],
+                orientation="h",
+                marker_color="#ff7f0e",
+                text=cat_summary["amount"].apply(lambda v: f"₹{v:,.0f}"),
+                textposition="outside",
+            )
+        )
+        fig_cat.update_layout(
+            xaxis_title="Amount (₹)",
+            yaxis_title="",
+            height=max(300, 40 * len(cat_summary)),
+            margin=dict(l=10, r=40, t=10, b=10),
+            yaxis=dict(autorange="reversed"),  # biggest on top
+        )
+        st.plotly_chart(fig_cat, use_container_width=True)
+
+        total_cat = cat_summary["amount"].sum()
+        top_cat = cat_summary.iloc[0]
+        st.caption(
+            f"Top category: **{top_cat['category']}** — ₹{top_cat['amount']:,.0f} "
+            f"({top_cat['amount']/total_cat*100:.0f}% of ₹{total_cat:,.0f})"
+        )
+    else:
+        st.info("No expenses this month")
+
     # FIX 2: Delete individual expense
     if not monthly_df.empty:
         st.subheader("🧾 Expenses")
