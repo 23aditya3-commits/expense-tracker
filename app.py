@@ -388,7 +388,7 @@ col1, col2 = st.columns(2)
 with col1:
     exp_date = st.date_input("Date", date.today())
     category = st.selectbox("Category", [
-        "Grocery", "Pets", "Dress", "Fun", "Edu", "Misc", "Food", "Rent", "Petrol", "Other"
+        "Grocery", "Pets", "Dress", "Fun", "Edu", "Misc", "Food", "Rent", "Petrol", "Gym", "Other"
     ])
 with col2:
     payment_mode = st.selectbox("Mode", [
